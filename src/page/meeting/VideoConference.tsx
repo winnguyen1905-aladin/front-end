@@ -56,7 +56,7 @@ export const VideoConference: React.FC = () => {
       onNewProducers: (data) => onNewProducersToConsume(data),
     };
 
-    socketManagerRef.current = new SocketManager(import.meta.env.VITE_SERVER_URL, {
+    socketManagerRef.current = new SocketManager(import.meta.env.VITE_API_URL, {
       connectionHandlers,
       roomHandlers,
       namespace: '/', // Use root namespace for video calls

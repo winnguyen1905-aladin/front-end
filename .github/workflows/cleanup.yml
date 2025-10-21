@@ -1,42 +1,35 @@
-name: Cleanup Old Artifacts
+name: Cleanup
 
 on:
   schedule:
-    # Chạy mỗi ngày lúc 2:00 AM UTC
-    - cron: '0 2 * * *'
+    - cron: '0 2 * * *'  # Daily at 2:00 AM UTC
   workflow_dispatch:
 
 jobs:
   cleanup:
-    name: Clean Docker Images & Artifacts
+    name: System Cleanup
     runs-on: self-hosted
     
     steps:
-      - name: Remove unused Docker images
-        run: |
-          echo "🧹 Cleaning up Docker images..."
-          docker image prune -a -f --filter "until=168h"  # Xóa images cũ hơn 7 ngày
-          echo "✅ Docker cleanup completed"
+    - name: Clean old deployments
+      run: |
+        echo "🧹 Cleaning old frontend backups..."
+        sudo find /var/www/aladin-frontend/backup-* -type d -mtime +7 -exec rm -rf {} \; 2>/dev/null || true
+        echo "✅ Old deployments cleaned"
 
-      - name: Remove dangling images
-        run: |
-          docker image prune -f
-          echo "✅ Dangling images removed"
+    - name: Clean nginx logs
+      run: |
+        sudo truncate -s 0 /var/log/nginx/access.log 2>/dev/null || true
+        sudo truncate -s 0 /var/log/nginx/error.log 2>/dev/null || true
+        echo "✅ Nginx logs cleared"
 
-      - name: Show Docker disk usage
-        run: |
-          echo "📊 Current Docker disk usage:"
-          docker system df
+    - name: Clean npm cache
+      run: |
+        npm cache clean --force 2>/dev/null || true
+        echo "✅ npm cache cleaned"
 
-      - name: Clean npm cache (if needed)
-        run: |
-          echo "🧹 Cleaning npm cache..."
-          npm cache verify
-        continue-on-error: true
-
-      - name: Summary
-        run: |
-          echo "✅ Cleanup job completed!"
-          echo "📊 Docker status:"
-          docker ps -a
+    - name: Show disk usage
+      run: |
+        echo "📊 Disk usage:"
+        df -h /var/www/ || true
 

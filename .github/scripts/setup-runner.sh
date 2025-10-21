@@ -2,7 +2,7 @@
 
 ###############################################################################
 # GitHub Actions Self-hosted Runner Setup Script
-# For Aladin Front-end Repository
+# For Aladin Front-end Repository (Nginx deployment)
 ###############################################################################
 
 set -e
@@ -17,7 +17,6 @@ NC='\033[0m' # No Color
 RUNNER_VERSION="2.329.0"
 REPO_URL="https://github.com/winuguyen1905-aladin/front-end"
 RUNNER_DIR="${HOME}/actions-runner-frontend"
-DOCKER_NETWORK="aladin-network"
 
 echo -e "${GREEN}╔════════════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║  Aladin Front-end - GitHub Runner Setup Script        ║${NC}"
@@ -27,7 +26,7 @@ echo ""
 # Check if running as root
 if [[ $EUID -eq 0 ]]; then
    echo -e "${RED}✗ This script should NOT be run as root${NC}"
-   echo "  Runner should run under a regular user account"
+   echo "  Runner should run under a regular user account with sudo access"
    exit 1
 fi
 
@@ -77,35 +76,56 @@ install_dependencies() {
     # Check for required tools
     MISSING_DEPS=()
     
-    command -v docker >/dev/null 2>&1 || MISSING_DEPS+=("docker")
     command -v curl >/dev/null 2>&1 || MISSING_DEPS+=("curl")
     command -v node >/dev/null 2>&1 || MISSING_DEPS+=("node")
+    command -v nginx >/dev/null 2>&1 || MISSING_DEPS+=("nginx")
     
     if [ ${#MISSING_DEPS[@]} -ne 0 ]; then
-        echo -e "${RED}✗ Missing dependencies: ${MISSING_DEPS[*]}${NC}"
+        echo -e "${YELLOW}⚠️  Missing dependencies: ${MISSING_DEPS[*]}${NC}"
         echo ""
-        echo "Please install missing dependencies:"
-        echo "  - Docker: https://docs.docker.com/get-docker/"
-        echo "  - Node.js: https://nodejs.org/"
-        exit 1
+        echo "Installing missing dependencies..."
+        
+        # Install missing packages
+        for dep in "${MISSING_DEPS[@]}"; do
+            case $dep in
+                "nginx")
+                    echo "Installing nginx..."
+                    sudo apt update && sudo apt install -y nginx
+                    ;;
+                "node")
+                    echo -e "${RED}✗ Node.js not found${NC}"
+                    echo "Please install Node.js: https://nodejs.org/"
+                    exit 1
+                    ;;
+                "curl")
+                    sudo apt update && sudo apt install -y curl
+                    ;;
+            esac
+        done
     fi
     
-    echo -e "${GREEN}✓ All dependencies installed${NC}"
-    echo "  - Docker: $(docker --version)"
+    echo -e "${GREEN}✓ All dependencies ready${NC}"
     echo "  - Node.js: $(node --version)"
     echo "  - npm: $(npm --version)"
+    echo "  - Nginx: $(nginx -v 2>&1 | cut -d' ' -f3)"
 }
 
-# Function to setup Docker network
-setup_docker_network() {
-    echo -e "${YELLOW}🐳 Setting up Docker network...${NC}"
+# Function to setup nginx
+setup_nginx() {
+    echo -e "${YELLOW}🌐 Setting up Nginx...${NC}"
     
-    if docker network ls | grep -q "$DOCKER_NETWORK"; then
-        echo "  Network '$DOCKER_NETWORK' already exists"
-    else
-        docker network create "$DOCKER_NETWORK"
-        echo -e "${GREEN}✓ Network '$DOCKER_NETWORK' created${NC}"
-    fi
+    # Create deployment directory
+    sudo mkdir -p /var/www/aladin-frontend
+    sudo chown -R www-data:www-data /var/www/aladin-frontend
+    sudo chmod -R 755 /var/www/aladin-frontend
+    
+    # Enable and start nginx
+    sudo systemctl enable nginx
+    sudo systemctl start nginx
+    
+    echo -e "${GREEN}✓ Nginx setup completed${NC}"
+    echo "  - Status: $(sudo systemctl is-active nginx)"
+    echo "  - Deploy directory: /var/www/aladin-frontend"
 }
 
 # Function to configure runner
@@ -178,10 +198,17 @@ verify_installation() {
         return 1
     fi
     
-    if docker network ls | grep -q "$DOCKER_NETWORK"; then
-        echo -e "${GREEN}✓ Docker network ready${NC}"
+    if sudo systemctl is-active --quiet nginx; then
+        echo -e "${GREEN}✓ Nginx is running${NC}"
     else
-        echo -e "${RED}✗ Docker network not found${NC}"
+        echo -e "${RED}✗ Nginx not running${NC}"
+        return 1
+    fi
+    
+    if [ -d "/var/www/aladin-frontend" ]; then
+        echo -e "${GREEN}✓ Deploy directory ready${NC}"
+    else
+        echo -e "${RED}✗ Deploy directory not found${NC}"
         return 1
     fi
     
@@ -205,13 +232,14 @@ show_next_steps() {
     echo "   - Push code to trigger CI/CD"
     echo "   - Or manually trigger from Actions tab"
     echo ""
-    echo "3. Monitor the runner:"
-    echo "   - Check logs: journalctl -u actions.runner.* -f"
-    echo "   - Or if running manually: check terminal output"
+    echo "3. Monitor the deployment:"
+    echo "   - Frontend: http://localhost:3000"
+    echo "   - Health: http://localhost:3000/health"
+    echo "   - Nginx status: sudo systemctl status nginx"
     echo ""
-    echo "4. Documentation:"
-    echo "   - Workflow docs: .github/workflows/README.md"
-    echo "   - GitHub Actions: https://docs.github.com/actions"
+    echo "4. Check logs:"
+    echo "   - Runner: journalctl -u actions.runner.* -f"
+    echo "   - Nginx: sudo tail -f /var/log/nginx/error.log"
     echo ""
 }
 
@@ -226,7 +254,7 @@ main() {
     download_runner
     echo ""
     
-    setup_docker_network
+    setup_nginx
     echo ""
     
     configure_runner

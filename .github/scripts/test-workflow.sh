@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ###############################################################################
-# Test Workflow Locally
+# Test Frontend Workflow Locally
 # Simulates GitHub Actions workflow steps locally for debugging
 ###############################################################################
 
@@ -17,13 +17,11 @@ NC='\033[0m'
 # Configuration
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 NODE_VERSION="18"
-DOCKER_IMAGE="aladin-frontend-test"
-DOCKER_CONTAINER="aladin-frontend-test-container"
-DOCKER_NETWORK="aladin-network"
+TEST_DIR="/tmp/aladin-frontend-test"
 TEST_PORT="3333"
 
 echo -e "${GREEN}╔════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║  Testing Workflow Locally                              ║${NC}"
+echo -e "${GREEN}║  Testing Frontend Workflow Locally                     ║${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -80,49 +78,52 @@ ls -lh dist/
 echo -e "${GREEN}✓ Build artifacts verified${NC}"
 echo ""
 
-# Step 6: Create Docker network
-echo -e "${BLUE}Step 6: Setting up Docker network...${NC}"
-docker network create "$DOCKER_NETWORK" 2>/dev/null || echo "  Network already exists"
-echo -e "${GREEN}✓ Docker network ready${NC}"
+# Step 6: Setup test environment
+echo -e "${BLUE}Step 6: Setting up test environment...${NC}"
+sudo mkdir -p "$TEST_DIR"
+sudo cp -r dist "$TEST_DIR/"
+sudo chown -R www-data:www-data "$TEST_DIR"
+echo -e "${GREEN}✓ Test environment ready${NC}"
 echo ""
 
-# Step 7: Build Docker image
-echo -e "${BLUE}Step 7: Building Docker image...${NC}"
-docker build -t "$DOCKER_IMAGE:latest" .
-echo -e "${GREEN}✓ Docker image built${NC}"
+# Step 7: Configure test nginx
+echo -e "${BLUE}Step 7: Configuring test nginx...${NC}"
+sudo tee /etc/nginx/sites-available/aladin-frontend-test > /dev/null <<EOF
+server {
+    listen $TEST_PORT;
+    server_name localhost;
+    root $TEST_DIR/dist;
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    location /health {
+        access_log off;
+        return 200 "healthy\n";
+        add_header Content-Type text/plain;
+    }
+}
+EOF
+
+sudo ln -sf /etc/nginx/sites-available/aladin-frontend-test /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+echo -e "${GREEN}✓ Test nginx configured${NC}"
 echo ""
 
-# Step 8: Stop old container if exists
-echo -e "${BLUE}Step 8: Cleaning up old containers...${NC}"
-docker stop "$DOCKER_CONTAINER" 2>/dev/null || true
-docker rm "$DOCKER_CONTAINER" 2>/dev/null || true
-echo -e "${GREEN}✓ Cleanup completed${NC}"
-echo ""
+# Step 8: Wait for nginx to be ready
+echo -e "${BLUE}Step 8: Waiting for nginx to be ready...${NC}"
+sleep 3
 
-# Step 9: Run container
-echo -e "${BLUE}Step 9: Starting container...${NC}"
-docker run -d \
-    --name "$DOCKER_CONTAINER" \
-    --network "$DOCKER_NETWORK" \
-    -p "$TEST_PORT:80" \
-    -e NODE_ENV=test \
-    "$DOCKER_IMAGE:latest"
+# Step 9: Verify deployment
+echo -e "${BLUE}Step 9: Verifying deployment...${NC}"
 
-echo -e "${GREEN}✓ Container started${NC}"
-echo ""
-
-# Step 10: Wait for container to be ready
-echo -e "${BLUE}Step 10: Waiting for container to be ready...${NC}"
-sleep 5
-
-# Step 11: Verify deployment
-echo -e "${BLUE}Step 11: Verifying deployment...${NC}"
-
-# Check if container is running
-if ! docker ps | grep -q "$DOCKER_CONTAINER"; then
-    echo -e "${RED}✗ Container is not running${NC}"
-    echo "Container logs:"
-    docker logs "$DOCKER_CONTAINER"
+# Check nginx is running
+if ! sudo systemctl is-active --quiet nginx; then
+    echo -e "${RED}✗ Nginx is not running${NC}"
+    sudo systemctl status nginx
     exit 1
 fi
 
@@ -132,8 +133,8 @@ if curl -f "http://localhost:$TEST_PORT/health" >/dev/null 2>&1; then
     echo -e "${GREEN}✓ Health check passed${NC}"
 else
     echo -e "${RED}✗ Health check failed${NC}"
-    echo "Container logs:"
-    docker logs "$DOCKER_CONTAINER"
+    sudo nginx -T
+    sudo journalctl -u nginx --no-pager -n 10
     exit 1
 fi
 
@@ -149,14 +150,14 @@ fi
 echo -e "${GREEN}✓ Deployment verified${NC}"
 echo ""
 
-# Step 12: Show container info
-echo -e "${BLUE}Step 12: Container information...${NC}"
+# Step 10: Show deployment info
+echo -e "${BLUE}Step 10: Deployment information...${NC}"
 echo ""
-echo "Container Status:"
-docker ps | grep "$DOCKER_CONTAINER"
+echo "Nginx Status:"
+sudo systemctl status nginx --no-pager
 echo ""
-echo "Container Stats:"
-docker stats "$DOCKER_CONTAINER" --no-stream
+echo "Test files:"
+ls -la "$TEST_DIR/dist/"
 echo ""
 
 # Summary
@@ -167,16 +168,18 @@ echo ""
 echo "Application is running at: http://localhost:$TEST_PORT"
 echo ""
 echo "Useful commands:"
-echo "  View logs:    docker logs -f $DOCKER_CONTAINER"
-echo "  Access shell: docker exec -it $DOCKER_CONTAINER sh"
-echo "  Stop:         docker stop $DOCKER_CONTAINER"
-echo "  Remove:       docker rm $DOCKER_CONTAINER"
+echo "  View nginx logs: sudo tail -f /var/log/nginx/access.log"
+echo "  View error logs: sudo tail -f /var/log/nginx/error.log"
+echo "  Nginx status:    sudo systemctl status nginx"
+echo "  Reload nginx:    sudo systemctl reload nginx"
 echo ""
 echo "To cleanup:"
-echo "  docker stop $DOCKER_CONTAINER && docker rm $DOCKER_CONTAINER"
-echo "  docker rmi $DOCKER_IMAGE:latest"
+echo "  sudo rm /etc/nginx/sites-enabled/aladin-frontend-test"
+echo "  sudo rm /etc/nginx/sites-available/aladin-frontend-test"
+echo "  sudo rm -rf $TEST_DIR"
+echo "  sudo systemctl reload nginx"
 echo ""
 
-read -p "Press Enter to view container logs (Ctrl+C to exit)..."
-docker logs -f "$DOCKER_CONTAINER"
+read -p "Press Enter to view nginx logs (Ctrl+C to exit)..."
+sudo tail -f /var/log/nginx/access.log
 

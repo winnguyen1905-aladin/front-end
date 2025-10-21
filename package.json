@@ -8,7 +8,13 @@
     "build": "tsc && vite build",
     "build:prod": "tsc && vite build --mode production",
     "preview": "vite preview",
-    "clean": "rimraf dist"
+    "clean": "rimraf dist",
+    "pm2:dev": "pm2 start ecosystem.config.js --only aladin-frontend-dev",
+    "pm2:prod": "pm2 start ecosystem.config.js --only aladin-frontend-prod",
+    "pm2:stop": "pm2 stop ecosystem.config.js",
+    "pm2:delete": "pm2 delete ecosystem.config.js",
+    "pm2:logs": "pm2 logs aladin-frontend-prod",
+    "pm2:monit": "pm2 monit"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.13",
@@ -27,6 +33,7 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.15.0",
+    "serve": "^14.2.1",
     "socket.io-client": "^4.8.1"
   }
 }

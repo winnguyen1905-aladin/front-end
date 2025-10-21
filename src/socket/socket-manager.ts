@@ -27,7 +27,7 @@ export class SocketManager {
   private chatManager: ChatEventManager;
 
   constructor(
-    serverUrl: string = import.meta.env.VITE_SERVER_URL || 'http://localhost:8090',
+    serverUrl: string = import.meta.env.VITE_API_URL || 'http://localhost:8090',
     options?: {
       connectionHandlers?: ConnectionEventHandlers;
       roomHandlers?: RoomEventHandlers;

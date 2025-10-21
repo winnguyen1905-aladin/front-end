@@ -1,9 +1,7 @@
-.PHONY: help install dev build clean docker-build docker-run docker-stop test lint
+.PHONY: help install dev build clean deploy test lint status setup
 
 # Variables
-DOCKER_IMAGE=aladin-frontend
-DOCKER_CONTAINER=aladin-frontend-local
-DOCKER_NETWORK=aladin-network
+DEPLOY_DIR=/var/www/aladin-frontend
 PORT=3000
 
 # Colors
@@ -52,47 +50,49 @@ clean-all: ## Clean all generated files including node_modules
 	rm -rf dist node_modules node_modules/.vite package-lock.json
 	@echo "$(GREEN)✓ All clean completed$(NC)"
 
-##@ Docker
-docker-network: ## Create Docker network
-	@echo "$(BLUE)Creating Docker network...$(NC)"
-	@docker network create $(DOCKER_NETWORK) 2>/dev/null || echo "Network already exists"
-	@echo "$(GREEN)✓ Network ready$(NC)"
-
-docker-build: ## Build Docker image
-	@echo "$(BLUE)Building Docker image...$(NC)"
-	docker build -t $(DOCKER_IMAGE):latest .
-	@echo "$(GREEN)✓ Docker image built$(NC)"
-
-docker-run: docker-network docker-stop ## Run Docker container
-	@echo "$(BLUE)Starting Docker container...$(NC)"
-	docker run -d \
-		--name $(DOCKER_CONTAINER) \
-		--network $(DOCKER_NETWORK) \
-		-p $(PORT):80 \
-		-e NODE_ENV=production \
-		$(DOCKER_IMAGE):latest
-	@echo "$(GREEN)✓ Container started$(NC)"
+##@ Deployment (PM2)
+deploy: build pm2-deploy ## Build and deploy with PM2
+	@echo "$(GREEN)✓ Deployment completed$(NC)"
 	@echo "$(GREEN)→ Access at: http://localhost:$(PORT)$(NC)"
 
-docker-stop: ## Stop and remove Docker container
-	@echo "$(BLUE)Stopping Docker container...$(NC)"
-	@docker stop $(DOCKER_CONTAINER) 2>/dev/null || true
-	@docker rm $(DOCKER_CONTAINER) 2>/dev/null || true
-	@echo "$(GREEN)✓ Container stopped$(NC)"
+pm2-deploy: ## Deploy with PM2
+	@echo "$(BLUE)Deploying frontend with PM2...$(NC)"
+	@pm2 delete aladin-frontend-prod 2>/dev/null || true
+	@pm2 start ecosystem.config.js --only aladin-frontend-prod --env production
+	@pm2 save
+	@echo "$(GREEN)✓ PM2 deployment completed$(NC)"
 
-docker-logs: ## Show Docker container logs
-	@docker logs -f $(DOCKER_CONTAINER)
+pm2-dev: ## Start development server with PM2
+	@echo "$(BLUE)Starting dev server with PM2...$(NC)"
+	@pm2 delete aladin-frontend-dev 2>/dev/null || true
+	@pm2 start ecosystem.config.js --only aladin-frontend-dev
+	@pm2 save
+	@echo "$(GREEN)✓ Dev server started$(NC)"
+	@echo "$(GREEN)→ Access at: http://localhost:5173$(NC)"
 
-docker-shell: ## Access Docker container shell
-	@docker exec -it $(DOCKER_CONTAINER) sh
+pm2-stop: ## Stop PM2 processes
+	@echo "$(BLUE)Stopping PM2 processes...$(NC)"
+	@pm2 stop ecosystem.config.js || true
+	@echo "$(GREEN)✓ PM2 processes stopped$(NC)"
 
-docker-compose-up: docker-network ## Run with docker-compose
-	@echo "$(BLUE)Starting with docker-compose...$(NC)"
-	docker-compose -f docker-compose.dev.yml up --build
+pm2-delete: ## Delete PM2 processes
+	@echo "$(BLUE)Deleting PM2 processes...$(NC)"
+	@pm2 delete ecosystem.config.js || true
+	@echo "$(GREEN)✓ PM2 processes deleted$(NC)"
 
-docker-compose-down: ## Stop docker-compose
-	@echo "$(BLUE)Stopping docker-compose...$(NC)"
-	docker-compose -f docker-compose.dev.yml down
+pm2-restart: ## Restart PM2 processes
+	@echo "$(BLUE)Restarting PM2 processes...$(NC)"
+	@pm2 restart ecosystem.config.js
+	@echo "$(GREEN)✓ PM2 processes restarted$(NC)"
+
+pm2-logs: ## Show PM2 logs
+	@pm2 logs aladin-frontend-prod
+
+pm2-monit: ## Show PM2 monitoring
+	@pm2 monit
+
+pm2-status: ## Show PM2 status
+	@pm2 status
 
 ##@ Quality
 lint: ## Run linter (if configured)
@@ -113,48 +113,39 @@ audit: ## Check for security vulnerabilities
 	npm audit
 
 ##@ Testing
-test-local: build docker-build docker-run ## Test complete local workflow
-	@echo "$(GREEN)Testing local deployment...$(NC)"
-	@sleep 5
-	@curl -f http://localhost:$(PORT)/health && \
-		echo "$(GREEN)✓ Health check passed$(NC)" || \
-		echo "$(YELLOW)⚠️  Health check failed$(NC)"
-
-##@ Deployment
-deploy-local: docker-build docker-run ## Deploy locally with Docker
-	@echo "$(GREEN)✓ Local deployment completed$(NC)"
-	@echo "$(GREEN)→ Frontend: http://localhost:$(PORT)$(NC)"
-	@echo "$(GREEN)→ Health: http://localhost:$(PORT)/health$(NC)"
+test-local: ## Test complete local workflow
+	@echo "$(BLUE)Testing local workflow...$(NC)"
+	@chmod +x .github/scripts/test-workflow.sh
+	@./.github/scripts/test-workflow.sh
 
 ##@ Utilities
 info: ## Show project information
 	@echo "$(GREEN)Project Information$(NC)"
 	@echo "  Node version: $$(node --version)"
 	@echo "  npm version: $$(npm --version)"
-	@echo "  Docker version: $$(docker --version)"
+	@echo "  Nginx version: $$(nginx -v 2>&1 | cut -d' ' -f3)"
 	@echo ""
 	@echo "$(GREEN)Configuration$(NC)"
-	@echo "  Image: $(DOCKER_IMAGE)"
-	@echo "  Container: $(DOCKER_CONTAINER)"
-	@echo "  Network: $(DOCKER_NETWORK)"
+	@echo "  Deploy directory: $(DEPLOY_DIR)"
 	@echo "  Port: $(PORT)"
+	@echo "  Frontend URL: http://localhost:$(PORT)"
 
-status: ## Show Docker status
-	@echo "$(GREEN)Docker Status$(NC)"
+status: ## Show deployment status
+	@echo "$(GREEN)Deployment Status$(NC)"
 	@echo ""
-	@echo "$(BLUE)Networks:$(NC)"
-	@docker network ls | grep $(DOCKER_NETWORK) || echo "  Network not found"
+	@echo "$(BLUE)PM2 Status:$(NC)"
+	@pm2 status || echo "  PM2 not running"
 	@echo ""
-	@echo "$(BLUE)Images:$(NC)"
-	@docker images | grep $(DOCKER_IMAGE) || echo "  No images found"
+	@echo "$(BLUE)Frontend Process:$(NC)"
+	@pm2 info aladin-frontend-prod 2>/dev/null || echo "  Frontend not running"
 	@echo ""
-	@echo "$(BLUE)Containers:$(NC)"
-	@docker ps -a | grep $(DOCKER_CONTAINER) || echo "  No containers found"
+	@echo "$(BLUE)Health Check:$(NC)"
+	@curl -f http://localhost:$(PORT)/ 2>/dev/null && echo "  ✓ Frontend is accessible" || echo "  ✗ Frontend not accessible"
 
-cleanup: docker-stop ## Cleanup Docker resources
-	@echo "$(BLUE)Cleaning up Docker resources...$(NC)"
-	@docker rmi $(DOCKER_IMAGE):latest 2>/dev/null || true
-	@docker system prune -f
+cleanup: ## Cleanup old deployments
+	@echo "$(BLUE)Cleaning up old deployments...$(NC)"
+	@sudo find $(DEPLOY_DIR)/backup-* -type d -mtime +7 -exec rm -rf {} \; 2>/dev/null || true
+	@npm cache clean --force 2>/dev/null || true
 	@echo "$(GREEN)✓ Cleanup completed$(NC)"
 
 ##@ CI/CD
@@ -164,17 +155,50 @@ ci-build: install type-check build ## Run CI build process
 ci-test: ci-build test-local ## Run CI test process
 	@echo "$(GREEN)✓ CI test completed$(NC)"
 
+##@ Environment
+env-setup: ## Setup environment files
+	@echo "$(BLUE)Setting up environment files...$(NC)"
+	@if [ ! -f ".env.local" ]; then \
+		cp .env.example .env.local; \
+		echo "$(GREEN)✓ Created .env.local from template$(NC)"; \
+		echo "$(YELLOW)⚠️  Please edit .env.local to customize your settings$(NC)"; \
+	else \
+		echo "$(YELLOW).env.local already exists$(NC)"; \
+	fi
+
+env-check: ## Check environment variables
+	@echo "$(BLUE)Environment Variables:$(NC)"
+	@echo "  Files:"
+	@ls -la .env* 2>/dev/null || echo "  No .env files found"
+	@echo ""
+	@echo "  Current NODE_ENV: $${NODE_ENV:-not set}"
+	@echo "  VITE_API_URL: $${VITE_API_URL:-not set}"
+	@echo "  VITE_SOCKET_URL: $${VITE_SOCKET_URL:-not set}"
+
 ##@ Setup
-setup: install docker-network ## Initial setup
+setup: install env-setup pm2-check ## Initial setup
 	@echo "$(GREEN)╔════════════════════════════════════════╗$(NC)"
 	@echo "$(GREEN)║  Setup completed successfully! 🎉      ║$(NC)"
 	@echo "$(GREEN)╚════════════════════════════════════════╝$(NC)"
 	@echo ""
 	@echo "Next steps:"
-	@echo "  1. Run dev server: $(BLUE)make dev$(NC)"
-	@echo "  2. Build project: $(BLUE)make build$(NC)"
-	@echo "  3. Test Docker: $(BLUE)make test-local$(NC)"
-	@echo "  4. Deploy local: $(BLUE)make deploy-local$(NC)"
+	@echo "  1. Edit .env.local: $(BLUE)nano .env.local$(NC)"
+	@echo "  2. Run dev server: $(BLUE)make dev$(NC) or $(BLUE)make pm2-dev$(NC)"
+	@echo "  3. Build project: $(BLUE)make build$(NC)"
+	@echo "  4. Deploy with PM2: $(BLUE)make deploy$(NC)"
+	@echo ""
+	@echo "PM2 Commands:"
+	@echo "  - Status: $(BLUE)make pm2-status$(NC)"
+	@echo "  - Logs: $(BLUE)make pm2-logs$(NC)"
+	@echo "  - Restart: $(BLUE)make pm2-restart$(NC)"
 	@echo ""
 	@echo "For more commands: $(BLUE)make help$(NC)"
 
+pm2-check: ## Check and install PM2 if needed
+	@if ! command -v pm2 &> /dev/null; then \
+		echo "$(YELLOW)PM2 not found, installing...$(NC)"; \
+		npm install -g pm2; \
+		echo "$(GREEN)✓ PM2 installed$(NC)"; \
+	else \
+		echo "$(GREEN)✓ PM2 already installed: $$(pm2 --version)$(NC)"; \
+	fi

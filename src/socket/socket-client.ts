@@ -5,13 +5,14 @@ import {
   SocketError,
   SocketTimeoutError 
 } from './types/events';
+import { env, isDebugEnabled } from '../config/env';
 
 export class SocketClient {
   private socket: Socket<ServerToClientEvents, ClientToServerEvents>;
   private readonly defaultTimeout: number = 8000;
 
   constructor(
-    serverUrl: string = import.meta.env.VITE_SERVER_URL || 'http://localhost:8090', 
+    serverUrl: string = env.SOCKET_URL, 
     namespace: string = '/',
     auth?: Record<string, any>
   ) {
@@ -25,7 +26,10 @@ export class SocketClient {
       auth: auth || {}, // Pass auth during construction
     });
     
-    console.log(`[SocketClient] Connecting to: ${fullUrl}`, auth ? `with auth: ${JSON.stringify(auth)}` : '');
+    // Debug logging only in debug mode
+    if (isDebugEnabled()) {
+      console.log(`[SocketClient] Connecting to: ${fullUrl}`, auth ? `with auth: ${JSON.stringify(auth)}` : '');
+    }
   }
 
   // ==============================

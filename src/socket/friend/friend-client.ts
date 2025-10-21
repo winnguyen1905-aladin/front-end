@@ -3,7 +3,7 @@ import { io, Socket } from 'socket.io-client';
 export class FriendClient {
   private socket: Socket;
 
-  constructor(serverUrl: string = import.meta.env.VITE_SERVER_URL || 'http://localhost:8090', username?: string) {
+  constructor(serverUrl: string = import.meta.env.VITE_API_URL || 'http://localhost:8090', username?: string) {
     // Use the /chat namespace with username in auth
     this.socket = io(`${serverUrl}/chat`, {
       transports: ['websocket'],
