@@ -1,0 +1,266 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  NODE_VERSION: '18'
+
+jobs:
+  # ================================
+  # Job 1: Build and Test
+  # ================================
+  build-and-test:
+    name: Build and Test
+    runs-on: self-hosted
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint check
+        run: |
+          if [ -f "package.json" ] && grep -q "lint" package.json; then
+            npm run lint || echo "No lint script found, skipping..."
+          else
+            echo "No lint script configured, skipping..."
+          fi
+        shell: bash
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Build application
+        run: npm run build
+
+      - name: Test build artifacts
+        run: |
+          if [ ! -d "dist" ]; then
+            echo "Error: dist folder not found!"
+            exit 1
+          fi
+          if [ ! -f "dist/index.html" ]; then
+            echo "Error: index.html not found in dist!"
+            exit 1
+          fi
+          echo "Build artifacts verified successfully!"
+        shell: bash
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ github.sha }}
+          path: dist/
+          retention-days: 7
+
+  # ================================
+  # Job 2: Build Docker Image
+  # ================================
+  build-docker:
+    name: Build Docker Image
+    runs-on: self-hosted
+    needs: build-and-test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-version: ${{ steps.meta.outputs.version }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+          build-args: |
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ steps.meta.outputs.version }}
+
+      - name: Image digest
+        run: echo "Image digest:- ${{ steps.meta.outputs.digest }}"
+
+  # ================================
+  # Job 3: Deploy (Production)
+  # ================================
+  deploy-production:
+    name: Deploy to Production
+    runs-on: self-hosted
+    needs: build-docker
+    if: github.ref == 'refs/heads/main'
+    
+    environment:
+      name: production
+      url: https://your-domain.com  # Update với domain thực tế
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull latest image
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Stop and remove old container
+        run: |
+          docker stop aladin-frontend || true
+          docker rm aladin-frontend || true
+        continue-on-error: true
+
+      - name: Run new container
+        run: |
+          docker run -d \
+            --name aladin-frontend \
+            --restart unless-stopped \
+            -p 3000:80 \
+            --network aladin-network \
+            -e NODE_ENV=production \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Verify deployment
+        run: |
+          sleep 10
+          docker ps | grep aladin-frontend
+          curl -f http://localhost:3000/health || exit 1
+
+      - name: Clean up old images
+        run: |
+          docker image prune -f --filter "dangling=true"
+
+  # ================================
+  # Job 4: Deploy (Staging/Development)
+  # ================================
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: self-hosted
+    needs: build-docker
+    if: github.ref == 'refs/heads/develop'
+    
+    environment:
+      name: staging
+      url: https://staging.your-domain.com  # Update với domain thực tế
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull latest image
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:develop
+
+      - name: Stop and remove old container
+        run: |
+          docker stop aladin-frontend-staging || true
+          docker rm aladin-frontend-staging || true
+        continue-on-error: true
+
+      - name: Run new container
+        run: |
+          docker run -d \
+            --name aladin-frontend-staging \
+            --restart unless-stopped \
+            -p 3001:80 \
+            --network aladin-network \
+            -e NODE_ENV=staging \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:develop
+
+      - name: Verify deployment
+        run: |
+          sleep 10
+          docker ps | grep aladin-frontend-staging
+          curl -f http://localhost:3001/health || exit 1
+
+      - name: Clean up old images
+        run: |
+          docker image prune -f --filter "dangling=true"
+
+  # ================================
+  # Job 5: Notification (Optional)
+  # ================================
+  notify:
+    name: Send Notification
+    runs-on: self-hosted
+    needs: [deploy-production, deploy-staging]
+    if: always()
+    
+    steps:
+      - name: Notify deployment status
+        run: |
+          if [ "${{ needs.deploy-production.result }}" == "success" ] || [ "${{ needs.deploy-staging.result }}" == "success" ]; then
+            echo "✅ Deployment successful!"
+            echo "Branch: ${{ github.ref_name }}"
+            echo "Commit: ${{ github.sha }}"
+            echo "Image: ${{ needs.build-docker.outputs.image-tag }}"
+          else
+            echo "❌ Deployment failed!"
+            exit 1
+          fi
+        shell: bash
+

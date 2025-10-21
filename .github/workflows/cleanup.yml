@@ -1,0 +1,42 @@
+name: Cleanup Old Artifacts
+
+on:
+  schedule:
+    # Chạy mỗi ngày lúc 2:00 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    name: Clean Docker Images & Artifacts
+    runs-on: self-hosted
+    
+    steps:
+      - name: Remove unused Docker images
+        run: |
+          echo "🧹 Cleaning up Docker images..."
+          docker image prune -a -f --filter "until=168h"  # Xóa images cũ hơn 7 ngày
+          echo "✅ Docker cleanup completed"
+
+      - name: Remove dangling images
+        run: |
+          docker image prune -f
+          echo "✅ Dangling images removed"
+
+      - name: Show Docker disk usage
+        run: |
+          echo "📊 Current Docker disk usage:"
+          docker system df
+
+      - name: Clean npm cache (if needed)
+        run: |
+          echo "🧹 Cleaning npm cache..."
+          npm cache verify
+        continue-on-error: true
+
+      - name: Summary
+        run: |
+          echo "✅ Cleanup job completed!"
+          echo "📊 Docker status:"
+          docker ps -a
+
