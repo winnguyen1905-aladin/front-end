@@ -74,7 +74,7 @@ Quản lý environment variables an toàn cho GitHub Actions deployment.
 ### **Option 3: Environment Variables in PM2**
 
 **Pros:**
-- ✅ PM2 ecosystem.config.js manages env
+- ✅ PM2 ecosystem.config.cjs manages env
 - ✅ Per-environment configuration
 - ✅ No separate `.env` file
 
@@ -83,7 +83,7 @@ Quản lý environment variables an toàn cho GitHub Actions deployment.
 - ⚠️ Mixed with deployment config
 
 **How it works:**
-1. Define env in `ecosystem.config.js`
+1. Define env in `ecosystem.config.cjs`
 2. PM2 injects variables at runtime
 
 ---

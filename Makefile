@@ -58,31 +58,31 @@ deploy: build pm2-deploy ## Build and deploy with PM2
 pm2-deploy: ## Deploy with PM2
 	@echo "$(BLUE)Deploying frontend with PM2...$(NC)"
 	@pm2 delete aladin-frontend-prod 2>/dev/null || true
-	@pm2 start ecosystem.config.js --only aladin-frontend-prod --env production
+	@pm2 start ecosystem.config.cjs --only aladin-frontend-prod --env production
 	@pm2 save
 	@echo "$(GREEN)✓ PM2 deployment completed$(NC)"
 
 pm2-dev: ## Start development server with PM2
 	@echo "$(BLUE)Starting dev server with PM2...$(NC)"
 	@pm2 delete aladin-frontend-dev 2>/dev/null || true
-	@pm2 start ecosystem.config.js --only aladin-frontend-dev
+	@pm2 start ecosystem.config.cjs --only aladin-frontend-dev
 	@pm2 save
 	@echo "$(GREEN)✓ Dev server started$(NC)"
 	@echo "$(GREEN)→ Access at: http://localhost:5173$(NC)"
 
 pm2-stop: ## Stop PM2 processes
 	@echo "$(BLUE)Stopping PM2 processes...$(NC)"
-	@pm2 stop ecosystem.config.js || true
+	@pm2 stop ecosystem.config.cjs || true
 	@echo "$(GREEN)✓ PM2 processes stopped$(NC)"
 
 pm2-delete: ## Delete PM2 processes
 	@echo "$(BLUE)Deleting PM2 processes...$(NC)"
-	@pm2 delete ecosystem.config.js || true
+	@pm2 delete ecosystem.config.cjs || true
 	@echo "$(GREEN)✓ PM2 processes deleted$(NC)"
 
 pm2-restart: ## Restart PM2 processes
 	@echo "$(BLUE)Restarting PM2 processes...$(NC)"
-	@pm2 restart ecosystem.config.js
+	@pm2 restart ecosystem.config.cjs
 	@echo "$(GREEN)✓ PM2 processes restarted$(NC)"
 
 pm2-logs: ## Show PM2 logs

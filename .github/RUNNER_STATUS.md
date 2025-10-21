@@ -196,7 +196,7 @@ Even with GitHub-hosted runner, your secrets are safe:
 
 - **Runner Setup**: `.github/scripts/setup-runner.sh`
 - **Secrets Setup**: `.github/SECRETS_SETUP.md`
-- **PM2 Deployment**: `ecosystem.config.js`
+- **PM2 Deployment**: `ecosystem.config.cjs`
 - **Environment Management**: `.github/ENV_MANAGEMENT.md`
 
 ---

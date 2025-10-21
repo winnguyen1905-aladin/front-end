@@ -137,7 +137,7 @@ jobs:
         pm2 delete aladin-frontend-prod || true
         
         # Start new process with PM2
-        pm2 start ecosystem.config.js --only aladin-frontend-prod --env production
+        pm2 start ecosystem.config.cjs --only aladin-frontend-prod --env production
         
         # Save PM2 process list
         pm2 save
