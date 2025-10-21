@@ -23,7 +23,7 @@
       // Production mode - Serve built static files
       name: 'aladin-frontend-prod',
       script: 'serve',
-      args: '-s dist -l 3000',
+      args: '-s dist -p 3000',
       cwd: './',
       instances: 1,
       autorestart: true,
