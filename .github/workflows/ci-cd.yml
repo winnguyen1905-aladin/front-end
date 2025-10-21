@@ -13,7 +13,7 @@ jobs:
   # Job 1: Build and Test
   test:
     name: Build and Test
-    runs-on: self-hosted
+    runs-on: ubuntu-latest  # Temporary: using GitHub-hosted runner for testing
 
     strategy:
       matrix:
@@ -58,14 +58,17 @@ jobs:
         ls -la dist/
   
   # Job 2: Deploy to Production (only on main branch push)
+  # ⚠️ DISABLED: Requires self-hosted runner with PM2
+  # Enable this after setting up self-hosted runner
   deploy:
     name: Deploy to Production  
     runs-on: self-hosted
     needs: test
-    if: |
-      github.event_name == 'push' && 
-      github.ref == 'refs/heads/main' &&
-      needs.test.result == 'success'
+    if: false  # Disabled temporarily - enable after runner setup
+    # if: |
+    #   github.event_name == 'push' && 
+    #   github.ref == 'refs/heads/main' &&
+    #   needs.test.result == 'success'
     
     steps:
     - name: Checkout code
