@@ -1,0 +1,8 @@
+{
+  "watch": ["src/**/*", "dist/**/*"],
+  "ext": "js,ts,json",
+  "ignore": ["node_modules/**/*", "dist/**/*.map"],
+  "exec": "npm run build && node src/server.js",
+  "delay": "1000"
+}
+

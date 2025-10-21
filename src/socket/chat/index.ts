@@ -1,0 +1,63 @@
+// Re-export chat event manager and handlers
+export { ChatEventManager, type ChatEventHandlers } from './chatEvents';
+
+// Re-export request types
+export type {
+  BaseMessage,
+  SendMessageRequest,
+  MarkMessagesReadRequest,
+  EditMessageRequest,
+  DeleteMessageRequest,
+  GetChatHistoryRequest,
+  TypingIndicatorRequest,
+  SendGroupMessageRequest,
+  GetGroupChatHistoryRequest,
+  PinGroupMessageRequest,
+  GroupMessageReactionRequest,
+  GroupTypingIndicatorRequest,
+  DeleteGroupMessageRequest,
+  EditGroupMessageRequest,
+  SearchMessagesRequest,
+  GetUnreadCountRequest,
+  SendGlobalMessageRequest,
+  GetGlobalChatHistoryRequest,
+  GlobalTypingIndicatorRequest,
+} from '../request/chat';
+
+// Re-export response types
+export type {
+  Message,
+  GroupMessage,
+  SendMessageResponse,
+  NewMessageData,
+  ChatHistoryResponse,
+  EditMessageResponse,
+  MessageEditedData,
+  DeleteMessageResponse,
+  MessageDeletedData,
+  MarkMessagesReadResponse,
+  MessagesReadData,
+  TypingIndicatorData,
+  SendGroupMessageResponse,
+  NewGroupMessageData,
+  GroupChatHistoryResponse,
+  PinGroupMessageResponse,
+  GroupMessagePinnedData,
+  GroupMessageReactionResponse,
+  GroupMessageReactionData,
+  GroupTypingIndicatorData,
+  DeleteGroupMessageResponse,
+  GroupMessageDeletedData,
+  EditGroupMessageResponse,
+  GroupMessageEditedData,
+  SearchMessagesResponse,
+  UnreadCountResponse,
+  UnreadCountUpdatedData,
+  ChatErrorResponse,
+  GlobalMessage,
+  SendGlobalMessageResponse,
+  NewGlobalMessageData,
+  GlobalChatHistoryResponse,
+  GlobalTypingIndicatorData,
+} from '../response/chat';
+
