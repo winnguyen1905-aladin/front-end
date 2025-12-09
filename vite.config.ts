@@ -14,7 +14,9 @@ export default defineConfig({
       '@utils': '/src/utils',
       '@components': '/src/components',
       '@pages': '/src/page',
-      '@routes': '/src/routes'
+      '@routes': '/src/routes',
+      '@context': '/src/context',
+      '@hooks': '/src/hooks'
     }
   }
 })

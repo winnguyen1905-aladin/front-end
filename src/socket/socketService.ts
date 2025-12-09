@@ -32,7 +32,7 @@ export interface JoinRoomResponse {
   newRoom: boolean;
   audioPidsToCreate?: string[];
   videoPidsToCreate?: (string | null)[];
-  associatedUserNames?: string[];
+  associatedUserIds?: string[];
   error?: string;
 }
 
@@ -55,7 +55,7 @@ export interface VideoCallHandlers {
 export interface NewProducersData {
   audioPidsToCreate: string[];
   videoPidsToCreate: (string | null)[];
-  associatedUserNames: string[];
+  associatedUserIds: string[];
 }
 
 // ==============================
@@ -89,7 +89,7 @@ class VideoCallSocketService {
     }
 
     this.handlers = handlers;
-    this.socket = io(serverUrl, {
+    this.socket = io('http://localhost:8090', {
       autoConnect: true,
       transports: ['websocket', 'polling'],
       retries: 10,
@@ -425,12 +425,12 @@ class VideoCallSocketService {
   async consumeProducers(data: NewProducersData): Promise<void> {
     if (!this.socket || !this.device) return;
 
-    const { audioPidsToCreate, videoPidsToCreate, associatedUserNames } = data;
+    const { audioPidsToCreate, videoPidsToCreate, associatedUserIds } = data;
 
     for (let i = 0; i < audioPidsToCreate.length; i++) {
       const audioPid = audioPidsToCreate[i];
       const videoPid = videoPidsToCreate[i];
-      const userId = associatedUserNames[i];
+      const userId = associatedUserIds[i];
 
       try {
         const transportParams = await this.socket.emitWithAck('requestTransport', { 

@@ -1,6 +1,6 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
-import { VideoConference } from '@pages/meeting/VideoConference';
-import { Home } from '@pages/Home';
+import { StreamProvider } from '@context/StreamContext';
+import { VideoConferencePage } from '@/page';
 
 export const router = createBrowserRouter([
   {
@@ -9,7 +9,9 @@ export const router = createBrowserRouter([
   },  
   {
     path: '/conference',
-    element: <VideoConference />,
+    element:  <StreamProvider>
+      <VideoConferencePage />
+    </StreamProvider>,
   },
   {
     path: '*',
