@@ -8,7 +8,7 @@ import { Transport, Producer, Consumer } from 'mediasoup-client/types';
 
 export interface ConsumerState {
   combinedStream: MediaStream;
-  userName: string;
+  userId: string;
   consumerTransport?: Transport;
   audioConsumer?: Consumer | null;
   videoConsumer?: Consumer | null;
@@ -29,16 +29,27 @@ export interface ProducerState {
 
 export interface JoinRoomResponse {
   routerRtpCapabilities: types.RtpCapabilities;
+  newRoom: boolean;
+  audioPidsToCreate?: string[];
+  videoPidsToCreate?: (string | null)[];
+  associatedUserNames?: string[];
+  error?: string;
 }
 
 export interface VideoCallHandlers {
   onConnect?: () => void;
   onDisconnect?: (reason: string) => void;
+  onReconnect?: () => void;
   onError?: (error: Error) => void;
   onActiveSpeakersUpdate?: (speakers: string[]) => void;
   onNewProducers?: (data: NewProducersData) => void;
-  onProducerClosed?: (data: { producerId: string }) => void;
-  onUserLeft?: (data: { participantId: string; userName: string }) => void;
+  onProducerClosed?: (data: { producerId: string; userId?: string }) => void;
+  onProducerPaused?: (data: { producerId: string }) => void;
+  onProducerResumed?: (data: { producerId: string }) => void;
+  onConsumerPaused?: (data: { consumerId: string; kind: 'audio' | 'video' }) => void;
+  onConsumerResumed?: (data: { consumerId: string; kind: 'audio' | 'video' }) => void;
+  onParticipantLeft?: (data: { participantId: string; userId: string }) => void;
+  onConsumeComplete?: () => void;
 }
 
 export interface NewProducersData {
@@ -65,6 +76,7 @@ class VideoCallSocketService {
     screenTransport: null,
   };
   private handlers: VideoCallHandlers = {};
+  private isConsumingMedia = true; // Track if consume is in progress
 
   // ==============================
   // Connection Management
@@ -80,6 +92,8 @@ class VideoCallSocketService {
     this.socket = io(serverUrl, {
       autoConnect: true,
       transports: ['websocket', 'polling'],
+      retries: 10,
+      ackTimeout: 1000000, // 30 seconds for emitWithAck
     });
 
     this.setupListeners();
@@ -110,6 +124,10 @@ class VideoCallSocketService {
   private setupListeners(): void {
     if (!this.socket) return;
 
+    // ==============================
+    // Connection Events
+    // ==============================
+
     this.socket.on('connect', () => {
       console.log('[VideoCallSocket] Connected:', this.socket?.id);
       this.handlers.onConnect?.();
@@ -120,35 +138,121 @@ class VideoCallSocketService {
       this.handlers.onDisconnect?.(reason);
     });
 
+    this.socket.on('reconnect', () => {
+      console.log('[VideoCallSocket] Reconnected');
+      this.handlers.onReconnect?.();
+    });
+
     this.socket.on('connect_error', (error) => {
       console.error('[VideoCallSocket] Connection error:', error);
       this.handlers.onError?.(error);
     });
 
-    // Video call events
+    // ==============================
+    // Active Speakers Events
+    // ==============================
+
+    // Handle both event names for compatibility
     this.socket.on('updateActiveSpeakers', (data: string[] | { activeSpeakers: string[] }) => {
       const speakers = Array.isArray(data) ? data : data.activeSpeakers;
-      console.log('[VideoCallSocket] Active speakers:', speakers);
+      console.log('[VideoCallSocket] Active speakers (updateActiveSpeakers):', speakers);
       this.handlers.onActiveSpeakersUpdate?.(speakers);
     });
 
-    this.socket.on('newProducersToConsume', async (data: NewProducersData) => {
-      console.log('[VideoCallSocket] New producers:', data);
-      this.handlers.onNewProducers?.(data);
-      await this.consumeProducers(data);
+    this.socket.on('activeSpeakersUpdate', (speakers: string[]) => {
+      console.log('[VideoCallSocket] Active speakers (activeSpeakersUpdate):', speakers);
+      this.handlers.onActiveSpeakersUpdate?.(speakers);
     });
 
-    this.socket.on('producerClosed', (data: { producerId: string }) => {
+    // ==============================
+    // Producer Events
+    // ==============================
+
+    this.socket.on('newProducersToConsume', async (data: NewProducersData) => {
+      console.log('[VideoCallSocket] New producers to consume:', data);
+      this.handlers.onNewProducers?.(data);
+      this.isConsumingMedia = true;
+      try {
+        await this.consumeProducers(data);
+      } finally {
+        this.isConsumingMedia = false;
+        // Notify that consume process is complete
+        this.handlers.onConsumeComplete?.();
+      }
+    });
+
+    this.socket.on('producerClosed', (data: { producerId: string; userId?: string }) => {
       console.log('[VideoCallSocket] Producer closed:', data);
       this.handleProducerClosed(data);
       this.handlers.onProducerClosed?.(data);
     });
 
-    this.socket.on('userLeft', (data: { participantId: string; userName: string }) => {
-      console.log('[VideoCallSocket] User left:', data);
-      this.handleUserLeft(data);
-      this.handlers.onUserLeft?.(data);
+    this.socket.on('producerPaused', (data: { producerId: string }) => {
+      console.log('[VideoCallSocket] Producer paused:', data);
+      this.handlers.onProducerPaused?.(data);
     });
+
+    this.socket.on('producerResumed', (data: { producerId: string }) => {
+      console.log('[VideoCallSocket] Producer resumed:', data);
+      this.handlers.onProducerResumed?.(data);
+    });
+
+    // ==============================
+    // Consumer Events
+    // ==============================
+
+    this.socket.on('consumerPaused', (data: { consumerId: string; kind: 'audio' | 'video' }) => {
+      console.log('[VideoCallSocket] Consumer paused:', data);
+      this.handleConsumerPaused(data);
+      this.handlers.onConsumerPaused?.(data);
+    });
+
+    this.socket.on('consumerResumed', (data: { consumerId: string; kind: 'audio' | 'video' }) => {
+      console.log('[VideoCallSocket] Consumer resumed:', data);
+      this.handleConsumerResumed(data);
+      this.handlers.onConsumerResumed?.(data);
+    });
+
+    // ==============================
+    // Participant Events
+    // ==============================
+
+    this.socket.on('participantLeft', (data: { participantId: string; userId: string }) => {
+      console.log('[VideoCallSocket] Participant left:', data);
+      this.handleParticipantLeft(data);
+      this.handlers.onParticipantLeft?.(data);
+    });
+
+    // Also listen for 'userLeft' for compatibility
+    this.socket.on('userLeft', (data: { participantId: string; userId: string }) => {
+      console.log('[VideoCallSocket] User left:', data);
+      this.handleParticipantLeft(data);
+      this.handlers.onParticipantLeft?.(data);
+    });
+  }
+
+  removeAllListeners(): void {
+    if (!this.socket) return;
+
+    // Connection events
+    this.socket.off('connect');
+    this.socket.off('disconnect');
+    this.socket.off('reconnect');
+    this.socket.off('connect_error');
+
+    // Call events
+    this.socket.off('updateActiveSpeakers');
+    this.socket.off('activeSpeakersUpdate');
+    this.socket.off('newProducersToConsume');
+    this.socket.off('producerClosed');
+    this.socket.off('producerPaused');
+    this.socket.off('producerResumed');
+    this.socket.off('consumerPaused');
+    this.socket.off('consumerResumed');
+    this.socket.off('participantLeft');
+    this.socket.off('userLeft');
+
+    console.log('[VideoCallSocket] All listeners removed');
   }
 
   updateHandlers(handlers: Partial<VideoCallHandlers>): void {
@@ -159,11 +263,20 @@ class VideoCallSocketService {
   // Room Management
   // ==============================
 
-  async joinRoom(userName: string, roomName: string): Promise<JoinRoomResponse> {
+  async joinRoom(userId: string, roomId: string): Promise<JoinRoomResponse> {
     if (!this.socket) throw new Error('Socket not connected');
-
-    const response = await this.socket.emitWithAck('joinRoom', { userName, roomName });
+    userId = (Math.random() * 1000).toString()
+    const response = await this.socket.emitWithAck('joinRoom', { userId, roomId });
     console.log('[VideoCallSocket] Joined room:', response);
+    // Validate response has required routerRtpCapabilities
+    if (!response || typeof response !== 'object' || !response.routerRtpCapabilities) {
+      throw new Error('Invalid joinRoom response: missing routerRtpCapabilities');
+    }
+    // important
+    if(response.newRoom) {
+      this.isConsumingMedia = false; 
+    }
+    
     return response;
   }
 
@@ -181,6 +294,10 @@ class VideoCallSocketService {
   // ==============================
 
   async initDevice(routerRtpCapabilities: types.RtpCapabilities): Promise<Device> {
+    if (!routerRtpCapabilities || typeof routerRtpCapabilities !== 'object') {
+      throw new Error('Invalid routerRtpCapabilities: expected an object');
+    }
+    
     if (!this.device) {
       this.device = new Device();
     }
@@ -200,6 +317,10 @@ class VideoCallSocketService {
 
   isDeviceReady(): boolean {
     return this.deviceLoaded && this.device !== null;
+  }
+
+  isConsuming(): boolean {
+    return this.isConsumingMedia;
   }
 
   // ==============================
@@ -226,12 +347,7 @@ class VideoCallSocketService {
       audioProducer,
       videoProducer,
       producerTransport,
-    };
-
-    console.log('[VideoCallSocket] Started producing:', {
-      audio: audioProducer?.id,
-      video: videoProducer?.id,
-    });
+    }; 
 
     return this.producerState;
   }
@@ -244,7 +360,6 @@ class VideoCallSocketService {
     } else {
       await this.producerState.audioProducer.resume();
     }
-    console.log('[VideoCallSocket] Audio', mute ? 'muted' : 'unmuted');
   }
 
   async toggleVideo(disable: boolean): Promise<void> {
@@ -255,7 +370,6 @@ class VideoCallSocketService {
     } else {
       await this.producerState.videoProducer.resume();
     }
-    console.log('[VideoCallSocket] Video', disable ? 'disabled' : 'enabled');
   }
 
   async startScreenShare(screenStream: MediaStream): Promise<void> {
@@ -266,18 +380,12 @@ class VideoCallSocketService {
     const videoTrack = screenStream.getVideoTracks()[0];
     const audioTrack = screenStream.getAudioTracks()[0];
 
-    const screenVideoProducer = videoTrack
-      ? await screenTransport.produce({ track: videoTrack, appData: { source: 'screen' } })
-      : null;
-    const screenAudioProducer = audioTrack
-      ? await screenTransport.produce({ track: audioTrack, appData: { source: 'screen' } })
-      : null;
+    const screenVideoProducer = videoTrack ? await screenTransport.produce({ track: videoTrack, appData: { source: 'screen' } }) : null;
+    const screenAudioProducer = audioTrack ? await screenTransport.produce({ track: audioTrack, appData: { source: 'screen' } }) : null;
 
     this.producerState.screenVideoProducer = screenVideoProducer;
     this.producerState.screenAudioProducer = screenAudioProducer;
     this.producerState.screenTransport = screenTransport;
-
-    console.log('[VideoCallSocket] Screen share started');
   }
 
   async stopScreenShare(): Promise<void> {
@@ -304,7 +412,6 @@ class VideoCallSocketService {
       this.socket?.emit('closeProducers', { producerIds });
     }
 
-    console.log('[VideoCallSocket] Screen share stopped');
   }
 
   getProducerState(): ProducerState {
@@ -323,7 +430,7 @@ class VideoCallSocketService {
     for (let i = 0; i < audioPidsToCreate.length; i++) {
       const audioPid = audioPidsToCreate[i];
       const videoPid = videoPidsToCreate[i];
-      const userName = associatedUserNames[i];
+      const userId = associatedUserNames[i];
 
       try {
         const transportParams = await this.socket.emitWithAck('requestTransport', { 
@@ -357,13 +464,12 @@ class VideoCallSocketService {
 
         this.consumers[audioPid] = {
           combinedStream: new MediaStream(tracks),
-          userName,
+          userId,
           consumerTransport,
           audioConsumer,
           videoConsumer,
         };
 
-        console.log('[VideoCallSocket] Consumer created for:', userName);
       } catch (error) {
         console.error('[VideoCallSocket] Failed to consume:', audioPid, error);
       }
@@ -453,6 +559,9 @@ class VideoCallSocketService {
       const isVideo = state.videoConsumer?.producerId === data.producerId;
 
       if (isAudio || isVideo) {
+        // Clear video elements showing this consumer's stream
+        this.clearVideoElementsForConsumer(state);
+
         if (isAudio && state.audioConsumer) {
           state.audioConsumer.close();
           state.audioConsumer = null;
@@ -471,13 +580,57 @@ class VideoCallSocketService {
     }
   }
 
-  private handleUserLeft(data: { participantId: string }): void {
+  private handleConsumerPaused(data: { consumerId: string; kind: 'audio' | 'video' }): void {
+    for (const state of Object.values(this.consumers)) {
+      const consumer = data.kind === 'audio' ? state.audioConsumer : state.videoConsumer;
+      if (consumer?.id === data.consumerId) {
+        consumer.pause();
+        console.log(`[VideoCallSocket] ${data.kind} consumer paused for ${state.userId}`);
+        break;
+      }
+    }
+  }
+
+  private handleConsumerResumed(data: { consumerId: string; kind: 'audio' | 'video' }): void {
+    for (const state of Object.values(this.consumers)) {
+      const consumer = data.kind === 'audio' ? state.audioConsumer : state.videoConsumer;
+      if (consumer?.id === data.consumerId) {
+        consumer.resume();
+        console.log(`[VideoCallSocket] ${data.kind} consumer resumed for ${state.userId}`);
+        break;
+      }
+    }
+  }
+
+  private handleParticipantLeft(data: { participantId: string }): void {
     const state = this.consumers[data.participantId];
     if (state) {
+      // Clear video elements first
+      this.clearVideoElementsForConsumer(state);
+
       state.audioConsumer?.close();
       state.videoConsumer?.close();
       state.consumerTransport?.close();
       delete this.consumers[data.participantId];
+      console.log(`[VideoCallSocket] Cleaned up consumer for participant: ${data.participantId}`);
+    }
+        
+  }
+
+  private clearVideoElementsForConsumer(consumerState: ConsumerState): void {
+    try {
+      const remoteVideos = document.getElementsByClassName('remote-video') as HTMLCollectionOf<HTMLVideoElement>;
+      for (let i = 0; i < remoteVideos.length; i++) {
+        const videoEl = remoteVideos[i];
+        if (videoEl.srcObject === consumerState.combinedStream) {
+          videoEl.srcObject = null;
+          const usernameEl = document.getElementById(`username-${i}`);
+          if (usernameEl) usernameEl.innerHTML = '';
+          console.log(`[VideoCallSocket] Cleared video element ${i} for ${consumerState.userId}`);
+        }
+      }
+    } catch (error) {
+      console.warn('[VideoCallSocket] Error clearing video elements:', error);
     }
   }
 
@@ -518,6 +671,7 @@ class VideoCallSocketService {
   }
 
   destroy(): void {
+    this.removeAllListeners();
     this.endCall();
     this.disconnect();
     this.device = null;

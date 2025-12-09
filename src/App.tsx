@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
+
 import LoginPage from './page/auth/LoginPage';
-import ChatPage from './page/chat/ChatPage';
 import Home from './page/Home';
 import { UserStorage } from './utils/userStorage';
 
@@ -74,14 +74,6 @@ function App() {
     window.dispatchEvent(new Event('userInfoUpdated'));
   };
 
-  const handleLogout = () => {
-    UserStorage.clearUserInfo();
-    setCurrentUser(null);
-    
-    // Dispatch custom event for same-window updates
-    window.dispatchEvent(new Event('userInfoUpdated'));
-  };
-
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
@@ -119,11 +111,7 @@ function App() {
               element={
                 currentUser ? (
                   <>
-                    {console.log('🚀 App.tsx - Rendering ChatPage with username:', currentUser.username)}
-                    <ChatPage 
-                      currentUserName={currentUser.username}
-                      onLogout={handleLogout}
-                    />
+                     
                   </>
                 ) : (
                   <>

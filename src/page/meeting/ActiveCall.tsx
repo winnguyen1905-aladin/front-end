@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 
 interface ActiveCallProps {
   localVideoRef: React.RefObject<HTMLVideoElement>;
+  isRemoteMediaReady: boolean;
   isStreamEnabled: boolean;
   isStreamSent: boolean;
   isMuted: boolean;
@@ -19,6 +20,7 @@ interface ActiveCallProps {
 
 export const ActiveCall: React.FC<ActiveCallProps> = ({
   localVideoRef,
+  isRemoteMediaReady,
   isStreamEnabled,
   isStreamSent,
   isMuted,
@@ -184,9 +186,14 @@ export const ActiveCall: React.FC<ActiveCallProps> = ({
                 {isStreamEnabled && !isStreamSent && (
                   <button
                     onClick={onSendFeed}
-                    className="px-6 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-all shadow-lg"
+                    disabled={!isRemoteMediaReady}
+                    className={`px-6 py-2 text-white text-sm font-medium rounded-lg transition-all shadow-lg ${
+                      isRemoteMediaReady
+                        ? 'bg-green-600 hover:bg-green-700'
+                        : 'bg-gray-500 cursor-not-allowed opacity-60'
+                    }`}
                   >
-                    Start Broadcasting
+                    {isRemoteMediaReady ? 'Start Broadcasting' : 'Connecting to room...'}
                   </button>
                 )}
               </div>

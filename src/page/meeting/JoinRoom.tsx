@@ -1,8 +1,8 @@
 import React from 'react';
 
 interface JoinRoomProps {
-  roomName: string;
-  userName: string;
+  roomId: string;
+  userId: string;
   isJoining: boolean;
   isMicEnabled: boolean;
   isVideoEnabled: boolean;
@@ -15,8 +15,8 @@ interface JoinRoomProps {
 }
 
 export const JoinRoom: React.FC<JoinRoomProps> = ({
-  roomName,
-  userName,
+  roomId,
+  userId,
   isJoining,
   isMicEnabled,
   isVideoEnabled,
@@ -57,16 +57,16 @@ export const JoinRoom: React.FC<JoinRoomProps> = ({
                 <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-gray-700 to-gray-800">
                   <div className="w-24 h-24 bg-blue-600 rounded-full flex items-center justify-center mb-4">
                     <span className="text-4xl font-semibold text-white">
-                      {userName.charAt(0).toUpperCase() || 'U'}
+                      {userId.charAt(0).toUpperCase() || 'U'}
                     </span>
                   </div>
-                  <p className="text-gray-300 text-lg">{userName || 'You'}</p>
+                  <p className="text-gray-300 text-lg">{userId || 'You'}</p>
                 </div>
               )}
 
               {/* User Name Overlay */}
               <div className="absolute bottom-6 left-6 bg-black bg-opacity-60 px-4 py-2 rounded-lg">
-                <p className="text-white text-sm font-medium">{userName || 'You'}</p>
+                <p className="text-white text-sm font-medium">{userId || 'You'}</p>
               </div>
 
               {/* Controls Overlay */}
@@ -128,7 +128,7 @@ export const JoinRoom: React.FC<JoinRoomProps> = ({
                 </label>
                 <input
                   type="text"
-                  value={roomName}
+                  value={roomId}
                   onChange={(e) => onRoomNameChange(e.target.value)}
                   disabled={isJoining}
                   placeholder="Enter room code"
@@ -139,11 +139,11 @@ export const JoinRoom: React.FC<JoinRoomProps> = ({
               {/* User Name */}
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-2">
-                  Your name
+                  Ur name
                 </label>
                 <input
                   type="text"
-                  value={userName}
+                  value={Math.random()*1000}
                   onChange={(e) => onUserNameChange(e.target.value)}
                   disabled={isJoining}
                   placeholder="Enter your name"
@@ -174,7 +174,7 @@ export const JoinRoom: React.FC<JoinRoomProps> = ({
               {/* Join Button */}
               <button
                 onClick={onJoinRoom}
-                disabled={isJoining || !userName.trim() || !roomName.trim()}
+                disabled={isJoining || !userId.trim() || !roomId.trim()}
                 className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium py-4 rounded-lg transition-all shadow-lg hover:shadow-xl disabled:shadow-none transform hover:scale-[1.02] disabled:transform-none"
               >
                 {isJoining ? (

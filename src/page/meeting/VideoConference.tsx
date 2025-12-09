@@ -11,6 +11,7 @@ import { ActiveCall } from './ActiveCall';
 function useVideoCall() {
   const [isJoining, setIsJoining] = useState(false);
   const [isJoined, setIsJoined] = useState(false);
+  const [isRemoteMediaReady, setIsRemoteMediaReady] = useState(false);
   const [isStreamEnabled, setIsStreamEnabled] = useState(false);
   const [isStreamSent, setIsStreamSent] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
@@ -23,61 +24,188 @@ function useVideoCall() {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
   const previewStreamRef = useRef<MediaStream | null>(null);
+  const updateActiveSpeakersTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Update remote video elements when active speakers change
-  const updateRemoteVideos = useCallback((speakers: string[]) => {
+  // Perform the actual active speakers update with smooth transitions
+  const performActiveSpeakersUpdate = useCallback((newListOfActives: string[]) => {
     requestAnimationFrame(() => {
-      const consumers = videoCallSocket.getConsumers();
+      const startTime = performance.now();
       const remoteEls = document.getElementsByClassName('remote-video') as HTMLCollectionOf<HTMLVideoElement>;
+      const consumers = videoCallSocket.getConsumers();
       const producerState = videoCallSocket.getProducerState();
 
-      let slot = pinnedProducerId && consumers[pinnedProducerId] ? 1 : 0;
-
-      // Handle pinned video first
-      if (pinnedProducerId && consumers[pinnedProducerId]) {
-        const el = remoteEls[0];
-        const consumer = consumers[pinnedProducerId];
-        if (el && consumer.combinedStream && el.srcObject !== consumer.combinedStream) {
-          el.srcObject = consumer.combinedStream;
-          el.play().catch(() => {});
+      // Track current assignments to avoid unnecessary DOM updates
+      const currentAssignments = new Map<number, string>();
+      Array.from(remoteEls).forEach((el: HTMLVideoElement, index: number) => {
+        if (el.srcObject) {
+          for (const [aid, consumer] of Object.entries(consumers)) {
+            if (consumer.combinedStream === el.srcObject) {
+              currentAssignments.set(index, aid);
+              break;
+            }
+          }
         }
-        const nameEl = document.getElementById('username-0');
-        if (nameEl) nameEl.innerHTML = consumer.userName || '';
+      });
+
+      let slot = 0;
+      const newAssignments = new Map<number, string>();
+
+      // If there's a pinned video, always put it in slot 0 (main screen)
+      if (pinnedProducerId && consumers[pinnedProducerId]) {
+        newAssignments.set(0, pinnedProducerId);
+        slot = 1;
       }
 
-      speakers.forEach((aid) => {
-        // Skip own producer and pinned video
+      newListOfActives.forEach((aid: string) => {
+        // Skip own producer
         if (producerState.audioProducer?.id === aid) return;
-        if (pinnedProducerId === aid) return;
-        if (slot >= remoteEls.length) return;
+        // Skip if this is the pinned video (already in slot 0)
+        if (pinnedProducerId && aid === pinnedProducerId) return;
 
         const consumer = consumers[aid];
         if (consumer?.combinedStream) {
-          const el = remoteEls[slot];
-          if (el && el.srcObject !== consumer.combinedStream) {
-            el.srcObject = consumer.combinedStream;
-            el.play().catch(() => {});
-          }
-          const nameEl = document.getElementById(`username-${slot}`);
-          if (nameEl) nameEl.innerHTML = consumer.userName || '';
+          newAssignments.set(slot, aid);
           slot++;
         }
       });
+
+      let changedSlots = 0;
+
+      // Smooth DOM updates with fade effect
+      Array.from(remoteEls).forEach((_, index: number) => {
+        const currentAid = currentAssignments.get(index);
+        const newAid = newAssignments.get(index);
+
+        if (currentAid !== newAid) {
+          changedSlots++;
+
+          const remoteVideo = document.getElementById(`remote-video-${index}`) as HTMLVideoElement;
+          const remoteVideoUserName = document.getElementById(`userId-${index}`);
+
+          if (newAid && consumers[newAid]) {
+            const consumer = consumers[newAid];
+
+            if (remoteVideo && consumer.combinedStream) {
+              // Already playing the correct stream
+              if (remoteVideo.srcObject === consumer.combinedStream) {
+                if (remoteVideo.paused) {
+                  remoteVideo.play().catch(err => {
+                    console.warn(`[ActiveSpeakers] Resume play blocked for ${consumer.userId}:`, err.message);
+                  });
+                }
+                return;
+              }
+
+              // Smooth transition: fade out -> change source -> fade in
+              remoteVideo.style.opacity = '0.7';
+
+              setTimeout(() => {
+                remoteVideo.playsInline = true;
+                remoteVideo.muted = false;
+                remoteVideo.autoplay = true;
+                remoteVideo.srcObject = consumer.combinedStream;
+                remoteVideo.style.opacity = '1';
+                remoteVideo.style.transition = 'opacity 0.3s ease';
+
+                // Wait for video to be ready before playing
+                const tryPlayVideo = (): void => {
+                  if (remoteVideo.readyState >= 2) {
+                    remoteVideo.play().catch(err => {
+                      console.warn(`[ActiveSpeakers] Auto-play blocked for ${consumer.userId}:`, err.message);
+                    });
+                  } else {
+                    const onReady = (): void => {
+                      remoteVideo.play().catch(err => {
+                        console.warn(`[ActiveSpeakers] Auto-play blocked for ${consumer.userId}:`, err.message);
+                      });
+                      remoteVideo.removeEventListener('loadeddata', onReady);
+                      remoteVideo.removeEventListener('canplay', onReady);
+                    };
+
+                    remoteVideo.addEventListener('loadeddata', onReady, { once: true });
+                    remoteVideo.addEventListener('canplay', onReady, { once: true });
+
+                    // Fallback timeout
+                    setTimeout(() => {
+                      remoteVideo.removeEventListener('loadeddata', onReady);
+                      remoteVideo.removeEventListener('canplay', onReady);
+                    }, 2000);
+                  }
+                };
+
+                tryPlayVideo();
+
+                if (changedSlots <= 2) {
+                  console.log(`[ActiveSpeakers] Assigned ${consumer.userId} to slot ${index}`);
+                }
+              }, 50);
+            }
+
+            if (remoteVideoUserName) {
+              remoteVideoUserName.innerHTML = consumer.userId || '';
+            }
+          } else {
+            // Clear the slot with fade effect
+            if (remoteVideo) {
+              remoteVideo.style.opacity = '0.5';
+              setTimeout(() => {
+                remoteVideo.srcObject = null;
+                remoteVideo.style.opacity = '1';
+              }, 100);
+            }
+            if (remoteVideoUserName) {
+              remoteVideoUserName.innerHTML = '';
+            }
+          }
+        }
+      });
+
+      const processingTime = performance.now() - startTime;
+      if (changedSlots > 0) {
+        console.log(`[ActiveSpeakers] Updated ${changedSlots}/${remoteEls.length} slots in ${processingTime.toFixed(2)}ms`);
+      } else if (processingTime > 10) {
+        console.warn(`[ActiveSpeakers] Processing took ${processingTime.toFixed(2)}ms (no changes)`);
+      }
     });
   }, [pinnedProducerId]);
+
+  // Debounced active speakers update handler
+  const onActiveSpeakersUpdate = useCallback((newListOfActives: string[]) => {
+    // Debounce rapid updates to prevent video load interruptions
+    if (updateActiveSpeakersTimeoutRef.current) {
+      clearTimeout(updateActiveSpeakersTimeoutRef.current);
+    }
+
+    updateActiveSpeakersTimeoutRef.current = setTimeout(() => {
+      updateActiveSpeakersTimeoutRef.current = null;
+      performActiveSpeakersUpdate(newListOfActives);
+    }, 100); // 100ms debounce
+  }, [performActiveSpeakersUpdate]);
+
+  // Handle consume complete callback
+  const onConsumeComplete = useCallback(() => {
+    console.log('[VideoConference] Remote media setup complete, ready to broadcast');
+    setIsRemoteMediaReady(true);
+  }, []);
 
   // Initialize socket connection
   useEffect(() => {
     videoCallSocket.connect(import.meta.env.VITE_API_URL, {
       onConnect: () => console.log('[VideoConference] Connected'),
       onDisconnect: (reason) => console.warn('[VideoConference] Disconnected:', reason),
-      onActiveSpeakersUpdate: updateRemoteVideos,
+      onActiveSpeakersUpdate: onActiveSpeakersUpdate,
+      onConsumeComplete: onConsumeComplete,
     });
 
     return () => {
+      // Clear any pending debounced updates
+      if (updateActiveSpeakersTimeoutRef.current) {
+        clearTimeout(updateActiveSpeakersTimeoutRef.current);
+        updateActiveSpeakersTimeoutRef.current = null;
+      }
       videoCallSocket.destroy();
     };
-  }, [updateRemoteVideos]);
+  }, [onActiveSpeakersUpdate, onConsumeComplete]);
 
   // Preview video
   useEffect(() => {
@@ -98,17 +226,26 @@ function useVideoCall() {
     };
   }, [isVideoEnabled, isJoined]);
 
-  const joinRoom = async (userName: string, roomName: string) => {
-    if (isJoining || isJoined || !userName.trim() || !roomName.trim()) return;
+  const joinRoom = async (userId: string, roomId: string) => {
+    if (isJoining || isJoined || !userId.trim() || !roomId.trim()) return;
 
     setIsJoining(true);
+    setIsRemoteMediaReady(false); // Reset remote media ready state
     try {
       previewStreamRef.current?.getTracks().forEach(t => t.stop());
       previewStreamRef.current = null;
 
-      const response = await videoCallSocket.joinRoom(userName, roomName);
+      const response = await videoCallSocket.joinRoom(userId, roomId);
       await videoCallSocket.initDevice(response.routerRtpCapabilities);
       setIsJoined(true);
+      
+      // Poll until consume is complete, then allow broadcast
+      const checkInterval = setInterval(() => {
+        if (!videoCallSocket.isConsuming()) {
+          clearInterval(checkInterval);
+          setIsRemoteMediaReady(true);
+        }
+      }, 200);
     } catch (err) {
       console.error('[VideoConference] Join failed:', err);
     } finally {
@@ -209,6 +346,12 @@ function useVideoCall() {
   };
 
   const hangUp = async () => {
+    // Clear any pending debounced updates
+    if (updateActiveSpeakersTimeoutRef.current) {
+      clearTimeout(updateActiveSpeakersTimeoutRef.current);
+      updateActiveSpeakersTimeoutRef.current = null;
+    }
+
     if (isScreenSharing) await toggleScreenShare();
     await videoCallSocket.endCall();
 
@@ -222,6 +365,7 @@ function useVideoCall() {
     videoCallSocket.leaveRoom();
 
     setIsJoined(false);
+    setIsRemoteMediaReady(false);
     setIsStreamEnabled(false);
     setIsStreamSent(false);
     setIsMuted(false);
@@ -236,8 +380,11 @@ function useVideoCall() {
     const consumers = videoCallSocket.getConsumers();
     for (const [aid, consumer] of Object.entries(consumers)) {
       if (consumer.combinedStream === el.srcObject) {
-        setPinnedProducerId(prev => prev === aid ? null : aid);
-        updateRemoteVideos(Object.keys(consumers));
+        const newPinnedId = pinnedProducerId === aid ? null : aid;
+        setPinnedProducerId(newPinnedId);
+        console.log('[Pin]', newPinnedId ? `Pinned video: ${aid}` : 'Unpinned video');
+        // Force update active speakers to reflect pin change
+        performActiveSpeakersUpdate(Object.keys(consumers));
         break;
       }
     }
@@ -247,6 +394,7 @@ function useVideoCall() {
     // State
     isJoining,
     isJoined,
+    isRemoteMediaReady,
     isStreamEnabled,
     isStreamSent,
     isMuted,
@@ -275,13 +423,14 @@ function useVideoCall() {
 // ==============================
 
 export const VideoConference: React.FC = () => {
-  const [userName, setUserName] = useState('user');
-  const [roomName, setRoomName] = useState('');
+  const [userId, setUserName] = useState('user');
+  const [roomId, setRoomName] = useState('');
   const [isMicEnabled, setIsMicEnabled] = useState(true);
 
   const {
     isJoining,
     isJoined,
+    isRemoteMediaReady,
     isStreamEnabled,
     isStreamSent,
     isMuted,
@@ -304,8 +453,8 @@ export const VideoConference: React.FC = () => {
   if (!isJoined) {
     return (
       <JoinRoom
-        roomName={roomName}
-        userName={userName}
+        roomId={roomId}
+        userId={userId}
         isJoining={isJoining}
         isMicEnabled={isMicEnabled}
         isVideoEnabled={isVideoEnabled}
@@ -314,7 +463,7 @@ export const VideoConference: React.FC = () => {
         onUserNameChange={setUserName}
         onMicToggle={() => setIsMicEnabled(!isMicEnabled)}
         onVideoToggle={() => setIsVideoEnabled(!isVideoEnabled)}
-        onJoinRoom={() => joinRoom(userName, roomName)}
+        onJoinRoom={() => joinRoom(userId, roomId)}
       />
     );
   }
@@ -322,6 +471,7 @@ export const VideoConference: React.FC = () => {
   return (
     <ActiveCall
       localVideoRef={localVideoRef}
+      isRemoteMediaReady={isRemoteMediaReady}
       isStreamEnabled={isStreamEnabled}
       isStreamSent={isStreamSent}
       isMuted={isMuted}
