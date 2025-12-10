@@ -27,7 +27,8 @@ export const VideoConferencePage: React.FC = () => {
     isMuted,
     isVideoEnabled,
     isScreenSharing,
-    pinnedProducerId,
+    isNewRoom,
+    consumers,
     
     // Refs
     localVideoRef,
@@ -41,7 +42,6 @@ export const VideoConferencePage: React.FC = () => {
     toggleVideo,
     toggleScreenShare,
     hangUp,
-    pinVideo,
     setIsVideoEnabled,
   } = useVideoCall();
 
@@ -74,18 +74,14 @@ export const VideoConferencePage: React.FC = () => {
       isMuted={isMuted}
       isVideoEnabled={isVideoEnabled}
       isScreenSharing={isScreenSharing}
-      pinnedProducerId={pinnedProducerId}
+      consumers={consumers}
+      isNewRoom={isNewRoom}
       onEnableFeed={handleEnableFeed}
       onSendFeed={sendFeed}
       onMuteAudio={muteAudio}
       onVideoToggle={toggleVideo}
       onScreenShare={toggleScreenShare}
       onHangUp={hangUp}
-      onPinVideo={pinVideo}
     />
   );
 };
-
-// Keep backward compatibility with existing imports
-export const VideoConference = VideoConferencePage;
-export default VideoConferencePage;

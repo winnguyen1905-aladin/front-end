@@ -1,6 +1,6 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { StreamProvider } from '@context/StreamContext';
-import { VideoConferencePage } from '@/page';
+import { Home, VideoConferencePage } from '@/page';
 
 export const router = createBrowserRouter([
   {

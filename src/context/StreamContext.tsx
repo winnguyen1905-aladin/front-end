@@ -10,14 +10,20 @@ import React, {
 import { io, Socket } from 'socket.io-client';
 import { Device, types } from 'mediasoup-client';
 import { Transport, Producer, Consumer } from 'mediasoup-client/types';
+import { playJoinSound, playLeaveSound } from '../utils/sounds';
 
 // ==============================
 // Types
 // ==============================
 
+export interface UserInfo {
+  id: string;
+  displayName: string;
+}
+
 export interface ConsumerState {
   combinedStream: MediaStream;
-  userId: string;
+  user: UserInfo;
   consumerTransport?: Transport;
   audioConsumer?: Consumer | null;
   videoConsumer?: Consumer | null;
@@ -41,14 +47,19 @@ export interface JoinRoomResponse {
   newRoom: boolean;
   audioPidsToCreate?: string[];
   videoPidsToCreate?: (string | null)[];
-  associatedUserIds?: string[];
+  associatedUsers?: UserInfo[];
   error?: string;
 }
 
 export interface NewProducersData {
   audioPidsToCreate: string[];
   videoPidsToCreate: (string | null)[];
-  associatedUserIds: string[];
+  associatedUsers: UserInfo[];
+}
+
+export interface ConsumerListItem {
+  oderId: string;
+  odisplayName: string;
 }
 
 export interface StreamContextValue {
@@ -65,7 +76,8 @@ export interface StreamContextValue {
   isMuted: boolean;
   isVideoEnabled: boolean;
   isScreenSharing: boolean;
-  pinnedProducerId: string | null;
+  isNewRoom: boolean;
+  consumers: ConsumerListItem[];
   
   // Refs
   localVideoRef: React.RefObject<HTMLVideoElement>;
@@ -79,7 +91,6 @@ export interface StreamContextValue {
   toggleVideo: () => Promise<void>;
   toggleScreenShare: () => Promise<void>;
   hangUp: () => Promise<void>;
-  pinVideo: (index: number) => void;
   setIsVideoEnabled: React.Dispatch<React.SetStateAction<boolean>>;
   setIsMuted: React.Dispatch<React.SetStateAction<boolean>>;
   
@@ -131,7 +142,8 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
-  const [pinnedProducerId, setPinnedProducerId] = useState<string | null>(null);
+  const [isNewRoom, setIsNewRoom] = useState(false);
+  const [consumers, setConsumers] = useState<ConsumerListItem[]>([]);
 
   // Refs
   const socketRef = useRef<Socket | null>(null);
@@ -214,12 +226,18 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
     const socket = getSocket();
     const device = getDevice();
 
-    const { audioPidsToCreate, videoPidsToCreate, associatedUserIds } = data;
+    const { audioPidsToCreate, videoPidsToCreate, associatedUsers } = data;
 
     for (let i = 0; i < audioPidsToCreate.length; i++) {
       const audioPid = audioPidsToCreate[i];
       const videoPid = videoPidsToCreate[i];
-      const userId = associatedUserIds[i];
+      const user = associatedUsers[i];
+
+      // Skip if consumer already exists
+      if (consumersRef.current[audioPid]) {
+        console.log('[StreamContext] Consumer already exists:', audioPid);
+        continue;
+      }
 
       try {
         const transportParams = await socket.emitWithAck('requestTransport', {
@@ -253,7 +271,7 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
 
         consumersRef.current[audioPid] = {
           combinedStream: new MediaStream(tracks),
-          userId,
+          user,
           consumerTransport,
           audioConsumer,
           videoConsumer,
@@ -262,6 +280,17 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
         console.error('[StreamContext] Failed to consume:', audioPid, error);
       }
     }
+
+    // Update consumers state for UI
+    updateConsumersState();
+  };
+
+  const updateConsumersState = () => {
+    const consumerList = Object.entries(consumersRef.current).map(([audioPid, state]) => ({
+      oderId: audioPid,
+      odisplayName: state.user?.displayName || '',
+    }));
+    setConsumers(consumerList);
   };
 
   // ==============================
@@ -374,126 +403,99 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
     }
   };
 
-  const handleParticipantLeft = (data: { participantId: string }): void => {
-    const state = consumersRef.current[data.participantId];
-    if (state) {
-      clearVideoElementsForConsumer(state);
-      state.audioConsumer?.close();
-      state.videoConsumer?.close();
-      state.consumerTransport?.close();
-      delete consumersRef.current[data.participantId];
+  const handleParticipantLeft = (data: { userId: string }): void => {
+    const participantId = data.userId;
+    console.log('[StreamContext] handleParticipantLeft:', participantId);
+    let hasRemoved = false;
+
+    // Iterate through all consumers to find ones belonging to the participant
+    Object.entries(consumersRef.current).forEach(([key, state]) => {
+      console.log('[StreamContext] Checking consumer:', key, 'User:', state.user);
+      // Check if user ID matches (handle potential type mismatches)
+      if (state.user && String(state.user.id) === String(participantId)) {
+        console.log('[StreamContext] Removing consumer for user:', participantId);
+        clearVideoElementsForConsumer(state);
+        state.audioConsumer?.close();
+        state.videoConsumer?.close();
+        state.consumerTransport?.close();
+        delete consumersRef.current[key];
+        hasRemoved = true;
+      }
+    });
+
+    if (hasRemoved) {
+      // Update consumers state for UI
+      updateConsumersState();
+      // Play leave sound when participant leaves
+      playLeaveSound();
     }
   };
 
   // ==============================
-  // Active Speakers Handler
+  // Stream Assignment Handler
   // ==============================
 
-  const performActiveSpeakersUpdate = useCallback((newListOfActives: string[]) => {
+  // Assign streams to video elements based on consumers array order
+  const assignStreamsToVideoElements = useCallback(() => {
     requestAnimationFrame(() => {
-      const remoteEls = document.getElementsByClassName('remote-video') as HTMLCollectionOf<HTMLVideoElement>;
-      const consumers = consumersRef.current;
-      const producerState = producerStateRef.current;
+      const consumerEntries = Object.entries(consumersRef.current);
+      
+      consumerEntries.forEach(([audioPid, consumer], index) => {
+        const remoteVideo = document.getElementById(`remote-video-${index}`) as HTMLVideoElement;
+        const remoteVideoUserName = document.getElementById(`username-${index}`);
 
-      const currentAssignments = new Map<number, string>();
-      Array.from(remoteEls).forEach((el: HTMLVideoElement, index: number) => {
-        if (el.srcObject) {
-          for (const [aid, consumer] of Object.entries(consumers)) {
-            if (consumer.combinedStream === el.srcObject) {
-              currentAssignments.set(index, aid);
-              break;
-            }
-          }
-        }
-      });
-
-      let slot = 0;
-      const newAssignments = new Map<number, string>();
-
-      if (pinnedProducerId && consumers[pinnedProducerId]) {
-        newAssignments.set(0, pinnedProducerId);
-        slot = 1;
-      }
-
-      newListOfActives.forEach((aid: string) => {
-        if (producerState.audioProducer?.id === aid) return;
-        if (pinnedProducerId && aid === pinnedProducerId) return;
-
-        const consumer = consumers[aid];
-        if (consumer?.combinedStream) {
-          newAssignments.set(slot, aid);
-          slot++;
-        }
-      });
-
-      Array.from(remoteEls).forEach((_, index: number) => {
-        const currentAid = currentAssignments.get(index);
-        const newAid = newAssignments.get(index);
-
-        if (currentAid !== newAid) {
-          const remoteVideo = document.getElementById(`remote-video-${index}`) as HTMLVideoElement;
-          const remoteVideoUserName = document.getElementById(`userId-${index}`);
-
-          if (newAid && consumers[newAid]) {
-            const consumer = consumers[newAid];
-
-            if (remoteVideo && consumer.combinedStream) {
-              if (remoteVideo.srcObject === consumer.combinedStream) {
-                if (remoteVideo.paused) {
-                  remoteVideo.play().catch(() => {});
-                }
-                return;
-              }
-
-              remoteVideo.style.opacity = '0.7';
-              setTimeout(() => {
-                remoteVideo.playsInline = true;
-                remoteVideo.muted = false;
-                remoteVideo.autoplay = true;
-                remoteVideo.srcObject = consumer.combinedStream;
-                remoteVideo.style.opacity = '1';
-                remoteVideo.style.transition = 'opacity 0.3s ease';
-
-                if (remoteVideo.readyState >= 2) {
-                  remoteVideo.play().catch(() => {});
-                } else {
-                  remoteVideo.addEventListener('loadeddata', () => {
-                    remoteVideo.play().catch(() => {});
-                  }, { once: true });
-                }
-              }, 50);
-            }
-
-            if (remoteVideoUserName) {
-              remoteVideoUserName.innerHTML = consumer.userId || '';
+        if (remoteVideo && consumer.combinedStream) {
+          // Skip if already assigned
+          if (remoteVideo.srcObject === consumer.combinedStream) {
+            if (remoteVideo.paused) {
+              remoteVideo.play().catch(() => {});
             }
           } else {
-            if (remoteVideo) {
-              remoteVideo.style.opacity = '0.5';
-              setTimeout(() => {
-                remoteVideo.srcObject = null;
-                remoteVideo.style.opacity = '1';
-              }, 100);
-            }
-            if (remoteVideoUserName) {
-              remoteVideoUserName.innerHTML = '';
+            // Assign new stream
+            remoteVideo.playsInline = true;
+            remoteVideo.muted = false;
+            remoteVideo.autoplay = true;
+            remoteVideo.srcObject = consumer.combinedStream;
+
+            if (remoteVideo.readyState >= 2) {
+              remoteVideo.play().catch(() => {});
+            } else {
+              remoteVideo.addEventListener('loadeddata', () => {
+                remoteVideo.play().catch(() => {});
+              }, { once: true });
             }
           }
+        }
+
+        if (remoteVideoUserName) {
+          remoteVideoUserName.innerHTML = consumer.user?.displayName || '';
         }
       });
     });
-  }, [pinnedProducerId]);
+  }, []);
 
-  const onActiveSpeakersUpdate = useCallback((newListOfActives: string[]) => {
+  // Handle active speakers update from server - just trigger stream assignment
+  const onActiveSpeakersUpdate = useCallback((_newListOfActives: string[]) => {
     if (updateActiveSpeakersTimeoutRef.current) {
       clearTimeout(updateActiveSpeakersTimeoutRef.current);
     }
 
     updateActiveSpeakersTimeoutRef.current = setTimeout(() => {
       updateActiveSpeakersTimeoutRef.current = null;
-      performActiveSpeakersUpdate(newListOfActives);
+      assignStreamsToVideoElements();
     }, 100);
-  }, [performActiveSpeakersUpdate]);
+  }, [assignStreamsToVideoElements]);
+
+  // Trigger stream assignment when consumers state changes
+  useEffect(() => {
+    if (consumers.length > 0) {
+      // Small delay to ensure DOM elements are rendered
+      const timer = setTimeout(() => {
+        assignStreamsToVideoElements();
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [consumers, assignStreamsToVideoElements]);
 
   // ==============================
   // Socket Connection
@@ -540,6 +542,8 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
       isConsumingRef.current = true;
       try {
         await consumeProducers(data);
+        // Play join sound when new participant joins
+        playJoinSound();
       } finally {
         isConsumingRef.current = false;
         setIsRemoteMediaReady(true);
@@ -628,6 +632,7 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
       }
 
       setIsJoined(true);
+      setIsNewRoom(response.newRoom || false);
 
       if (response.newRoom) {
         isConsumingRef.current = false;
@@ -857,22 +862,8 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
     setIsStreamSent(false);
     setIsMuted(false);
     setIsScreenSharing(false);
-    setPinnedProducerId(null);
-  };
-
-  const pinVideo = (index: number): void => {
-    const el = document.getElementById(`remote-video-${index}`) as HTMLVideoElement;
-    if (!el?.srcObject) return;
-
-    const consumers = consumersRef.current;
-    for (const [aid, consumer] of Object.entries(consumers)) {
-      if (consumer.combinedStream === el.srcObject) {
-        const newPinnedId = pinnedProducerId === aid ? null : aid;
-        setPinnedProducerId(newPinnedId);
-        performActiveSpeakersUpdate(Object.keys(consumers));
-        break;
-      }
-    }
+    setIsNewRoom(false);
+    setConsumers([]);
   };
 
   // ==============================
@@ -893,7 +884,8 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
     isMuted,
     isVideoEnabled,
     isScreenSharing,
-    pinnedProducerId,
+    isNewRoom,
+    consumers,
     
     // Refs
     localVideoRef,
@@ -907,7 +899,6 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
     toggleVideo,
     toggleScreenShare,
     hangUp,
-    pinVideo,
     setIsVideoEnabled,
     setIsMuted,
     

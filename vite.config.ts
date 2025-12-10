@@ -9,6 +9,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
+      '@': '/src',
       '@socket': '/src/socket',
       '@types': '/src/types',
       '@utils': '/src/utils',

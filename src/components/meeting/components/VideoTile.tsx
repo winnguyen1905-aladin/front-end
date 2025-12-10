@@ -9,7 +9,7 @@ interface VideoTileProps {
   showPinButton?: boolean;
   onPin?: () => void;
   onUnpin?: () => void;
-  size?: 'thumbnail' | 'main' | 'pip';
+  size?: 'thumbnail' | 'main' | 'pip' | 'equal';
   muted?: boolean;
   label?: string;
   children?: React.ReactNode;
@@ -19,6 +19,7 @@ const sizeClasses = {
   thumbnail: 'w-[180px] h-[110px]',
   main: 'h-full',
   pip: 'w-52 h-40',
+  equal: 'w-full h-full',
 };
 
 export const VideoTile: React.FC<VideoTileProps> = ({
@@ -38,6 +39,7 @@ export const VideoTile: React.FC<VideoTileProps> = ({
     thumbnail: 'relative flex-shrink-0 bg-[#3c4043] rounded-xl overflow-hidden shadow-lg hover:ring-2 hover:ring-blue-500 transition-all group cursor-pointer',
     main: 'relative h-full bg-[#3c4043] rounded-2xl overflow-hidden shadow-2xl group',
     pip: 'relative bg-[#3c4043] rounded-xl overflow-hidden shadow-2xl border-2 border-gray-700 group hover:border-blue-500 transition-all',
+    equal: 'relative w-full h-full bg-[#3c4043] rounded-xl overflow-hidden shadow-lg hover:ring-2 hover:ring-blue-500 transition-all group',
   };
 
   return (
@@ -48,23 +50,19 @@ export const VideoTile: React.FC<VideoTileProps> = ({
       <video
         ref={videoRef}
         id={videoId}
-        className="w-full h-full object-cover remote-video"
+        className="w-full h-full object-contain remote-video"
         muted={muted}
         autoPlay
         playsInline
       />
       
-      {/* Username Label */}
-      {(userId || label) && (
-        <div 
-          id={userId}
-          className={`absolute ${size === 'thumbnail' ? 'bottom-2 left-2 right-2' : 'bottom-4 left-4'} bg-black/60 backdrop-blur-sm px-${size === 'thumbnail' ? '2' : '3'} py-${size === 'thumbnail' ? '1' : '1.5'} rounded${size === 'thumbnail' ? '' : '-lg'} ${size === 'thumbnail' ? 'text-center' : ''}`}
-        >
-          <span className={`text-white ${size === 'thumbnail' ? 'text-xs' : 'text-sm'} font-medium ${size === 'thumbnail' ? 'truncate block' : ''}`}>
-            {label}
-          </span>
-        </div>
-      )}
+      {/* Username Label - Dynamic content set via innerHTML by StreamContext */}
+      <div 
+        id={userId}
+        className={`absolute ${size === 'thumbnail' ? 'bottom-2 left-2 right-2' : 'bottom-4 left-4'} bg-black/60 backdrop-blur-sm ${size === 'thumbnail' ? 'px-2 py-1' : 'px-3 py-1.5'} ${size === 'thumbnail' ? 'rounded' : 'rounded-lg'} ${size === 'thumbnail' ? 'text-center' : ''} text-white ${size === 'thumbnail' ? 'text-xs' : 'text-sm'} font-medium ${size === 'thumbnail' ? 'truncate' : ''} empty:hidden`}
+      >
+        {label}
+      </div>
       
       {/* Pin Indicator */}
       {isPinned && (
