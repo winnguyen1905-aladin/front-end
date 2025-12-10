@@ -48,6 +48,11 @@ export interface JoinRoomResponse {
   audioPidsToCreate?: string[];
   videoPidsToCreate?: (string | null)[];
   associatedUsers?: UserInfo[];
+  // Room info from server
+  roomId?: string;
+  ownerId?: string;
+  isPasswordProtected?: boolean;
+  participantCount?: number;
   error?: string;
 }
 
@@ -60,6 +65,24 @@ export interface NewProducersData {
 export interface ConsumerListItem {
   oderId: string;
   odisplayName: string;
+}
+
+// Room-related interfaces
+export interface RoomParticipant {
+  oderId: string;
+  displayName: string;
+  isOwner: boolean;
+  isMuted?: boolean;
+  isVideoEnabled?: boolean;
+}
+
+export interface RoomInfo {
+  roomId: string;
+  ownerId: string;
+  isPasswordProtected: boolean;
+  participantCount: number;
+  participants: RoomParticipant[];
+  createdAt?: number;
 }
 
 export interface StreamContextValue {
@@ -78,13 +101,14 @@ export interface StreamContextValue {
   isScreenSharing: boolean;
   isNewRoom: boolean;
   consumers: ConsumerListItem[];
+  roomInfo: RoomInfo | null;
   
   // Refs
   localVideoRef: React.RefObject<HTMLVideoElement>;
   previewVideoRef: React.RefObject<HTMLVideoElement>;
   
   // Actions
-  joinRoom: (userId: string, roomId: string) => Promise<void>;
+  joinRoom: (userId: string, roomId: string, isMicEnabled?: boolean, isVideoEnabled?: boolean) => Promise<void>;
   enableFeed: (isMicEnabled: boolean, isVideoEnabled: boolean) => Promise<void>;
   sendFeed: () => Promise<void>;
   muteAudio: () => Promise<void>;
@@ -97,6 +121,9 @@ export interface StreamContextValue {
   // Consumer access
   getConsumers: () => ConsumersMap;
   getProducerState: () => ProducerState;
+  
+  // Stream management
+  refreshVideoStreams: () => void;
 }
 
 // ==============================
@@ -144,6 +171,7 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [isNewRoom, setIsNewRoom] = useState(false);
   const [consumers, setConsumers] = useState<ConsumerListItem[]>([]);
+  const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
 
   // Refs
   const socketRef = useRef<Socket | null>(null);
@@ -291,6 +319,21 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
       odisplayName: state.user?.displayName || '',
     }));
     setConsumers(consumerList);
+
+    // Also update room info participants
+    setRoomInfo(prev => {
+      if (!prev) return prev;
+      const participants = Object.entries(consumersRef.current).map(([audioPid, state]) => ({
+        oderId: state.user?.id || audioPid,
+        displayName: state.user?.displayName || '',
+        isOwner: state.user?.id === prev.ownerId,
+      }));
+      return {
+        ...prev,
+        participants,
+        participantCount: participants.length + 1, // +1 for self
+      };
+    });
   };
 
   // ==============================
@@ -403,8 +446,8 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
     }
   };
 
-  const handleParticipantLeft = (data: { userId: string }): void => {
-    const participantId = data.userId;
+  const handleParticipantLeft = (data: { participantId: string }): void => {
+    const participantId = data.participantId;
     console.log('[StreamContext] handleParticipantLeft:', participantId);
     let hasRemoved = false;
 
@@ -601,7 +644,12 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
   // Actions
   // ==============================
 
-  const joinRoom = async (userId: string, roomId: string): Promise<void> => {
+  const joinRoom = async (
+    userId: string, 
+    roomId: string, 
+    isMicEnabled: boolean = true, 
+    isVideoEnabled: boolean = true
+  ): Promise<void> => {
     if (isJoining || isJoined || !userId.trim() || !roomId.trim()) return;
 
     setIsJoining(true);
@@ -634,18 +682,57 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
       setIsJoined(true);
       setIsNewRoom(response.newRoom || false);
 
-      if (response.newRoom) {
+      // Set room info from server response
+      setRoomInfo({
+        roomId: response.roomId || roomId,
+        ownerId: response.ownerId || '',
+        isPasswordProtected: response.isPasswordProtected || false,
+        participantCount: response.participantCount || 1,
+        participants: response.associatedUsers?.map(user => ({
+          oderId: user.id,
+          displayName: user.displayName,
+          isOwner: user.id === response.ownerId,
+        })) || [],
+      });
+
+      // Consume existing producers if joining existing room
+      if (!response.newRoom && response.audioPidsToCreate && response.audioPidsToCreate.length > 0) {
+        console.log('[StreamContext] Joining existing room, consuming producers...');
+        isConsumingRef.current = true;
+        
+        // Consume producers from existing participants
+        consumeProducers({
+          audioPidsToCreate: response.audioPidsToCreate,
+          videoPidsToCreate: response.videoPidsToCreate || [],
+          associatedUsers: response.associatedUsers || [],
+        }).then(() => {
+          console.log('[StreamContext] Finished consuming existing producers');
+          isConsumingRef.current = false;
+          setIsRemoteMediaReady(true);
+        }).catch(err => {
+          console.error('[StreamContext] Error consuming producers:', err);
+          isConsumingRef.current = false;
+          setIsRemoteMediaReady(true);
+        });
+      } else {
+        // New room or no existing producers
         isConsumingRef.current = false;
         setIsRemoteMediaReady(true);
-      } else {
-        // Poll until consume is complete
-        const checkInterval = setInterval(() => {
-          if (!isConsumingRef.current) {
-            clearInterval(checkInterval);
-            setIsRemoteMediaReady(true);
-          }
-        }, 200);
       }
+
+      // Auto enable and send feed after successful join
+      console.log('[StreamContext] Auto-enabling feed with mic:', isMicEnabled, 'video:', isVideoEnabled);
+      console.log('[StreamContext] Device loaded:', deviceLoadedRef.current, 'Local stream:', !!localStreamRef.current);
+      
+      await enableFeed(isMicEnabled, isVideoEnabled);
+      console.log('[StreamContext] Feed enabled, local stream:', !!localStreamRef.current);
+      
+      // Wait a bit for state to settle before sending feed
+      await new Promise(resolve => setTimeout(resolve, 100));
+      console.log('[StreamContext] Starting sendFeed...');
+      await sendFeed();
+      console.log('[StreamContext] Feed sent successfully');
+      
     } catch (err) {
       console.error('[StreamContext] Join failed:', err);
     } finally {
@@ -654,18 +741,28 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
   };
 
   const enableFeed = async (isMicEnabled: boolean, isVidEnabled: boolean): Promise<void> => {
-    if (localStreamRef.current) return;
+    console.log('[StreamContext] enableFeed called - mic:', isMicEnabled, 'video:', isVidEnabled);
+    console.log('[StreamContext] Current local stream:', !!localStreamRef.current);
+    
+    if (localStreamRef.current) {
+      console.log('[StreamContext] Stream already exists, returning early');
+      return;
+    }
 
     try {
+      console.log('[StreamContext] Requesting user media...');
       const stream = await navigator.mediaDevices.getUserMedia({
         video: true,
         audio: true,
       });
+      console.log('[StreamContext] Got user media stream');
 
       localStreamRef.current = stream;
 
       const videoTrack = stream.getVideoTracks()[0];
       const audioTrack = stream.getAudioTracks()[0];
+      console.log('[StreamContext] Got tracks - video:', !!videoTrack, 'audio:', !!audioTrack);
+      
       if (videoTrack) videoTrack.enabled = isVidEnabled;
       if (audioTrack) audioTrack.enabled = isMicEnabled;
 
@@ -676,19 +773,26 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
 
       setIsStreamEnabled(true);
       if (!isMicEnabled) setIsMuted(true);
+      console.log('[StreamContext] enableFeed completed');
     } catch (err) {
       console.error('[StreamContext] Enable feed failed:', err);
     }
   };
 
   const sendFeed = async (): Promise<void> => {
-    if (!isJoined || !deviceLoadedRef.current || !localStreamRef.current) return;
+    // Check device and stream are ready (not isJoined state since it may not be updated yet)
+    if (!deviceLoadedRef.current || !localStreamRef.current) {
+      console.warn('[StreamContext] Cannot send feed - device or stream not ready');
+      return;
+    }
 
     try {
+      console.log('[StreamContext] Creating producer transport...');
       const producerTransport = await createProducerTransport();
 
       const videoTrack = localStreamRef.current.getVideoTracks()[0];
       const audioTrack = localStreamRef.current.getAudioTracks()[0];
+      console.log('[StreamContext] Tracks - video:', !!videoTrack, 'audio:', !!audioTrack);
 
       const videoProducer = videoTrack
         ? await producerTransport.produce({ track: videoTrack })
@@ -697,6 +801,8 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
         ? await producerTransport.produce({ track: audioTrack })
         : null;
 
+      console.log('[StreamContext] Producers created - video:', !!videoProducer, 'audio:', !!audioProducer);
+
       producerStateRef.current = {
         ...producerStateRef.current,
         audioProducer,
@@ -704,6 +810,7 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
         producerTransport,
       };
 
+      console.log('[StreamContext] Producer state updated:', producerStateRef.current);
       setIsStreamSent(true);
     } catch (err) {
       console.error('[StreamContext] Send feed failed:', err);
@@ -712,9 +819,15 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
 
   const muteAudio = async (): Promise<void> => {
     const state = producerStateRef.current;
-    if (!state.audioProducer) return;
+    console.log('[StreamContext] muteAudio - producer state:', state);
+    
+    if (!state.audioProducer) {
+      console.warn('[StreamContext] No audio producer available');
+      return;
+    }
 
     const shouldMute = !state.audioProducer.paused;
+    console.log('[StreamContext] Audio toggle - shouldMute:', shouldMute);
 
     if (shouldMute) {
       await state.audioProducer.pause();
@@ -728,9 +841,15 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
 
   const toggleVideo = async (): Promise<void> => {
     const state = producerStateRef.current;
-    if (!state.videoProducer) return;
+    console.log('[StreamContext] toggleVideo - producer state:', state);
+    
+    if (!state.videoProducer) {
+      console.warn('[StreamContext] No video producer available');
+      return;
+    }
 
     const shouldDisable = !state.videoProducer.paused;
+    console.log('[StreamContext] Video toggle - shouldDisable:', shouldDisable);
 
     if (localStreamRef.current) {
       const track = localStreamRef.current.getVideoTracks()[0];
@@ -864,6 +983,7 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
     setIsScreenSharing(false);
     setIsNewRoom(false);
     setConsumers([]);
+    setRoomInfo(null);
   };
 
   // ==============================
@@ -886,6 +1006,7 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
     isScreenSharing,
     isNewRoom,
     consumers,
+    roomInfo,
     
     // Refs
     localVideoRef,
@@ -905,6 +1026,9 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
     // Consumer access
     getConsumers,
     getProducerState,
+    
+    // Stream management
+    refreshVideoStreams: assignStreamsToVideoElements,
   };
 
   return (

@@ -13,15 +13,10 @@ export function useVideoCall() {
   const [roomId, setRoomId] = useState('');
   const [isMicEnabled, setIsMicEnabled] = useState(true);
 
-  // Wrapped join handler
+  // Wrapped join handler - pass preview settings to auto enable and send
   const handleJoinRoom = useCallback(async () => {
-    await stream.joinRoom(userId, roomId);
-  }, [stream, userId, roomId]);
-
-  // Wrapped enable feed handler
-  const handleEnableFeed = useCallback(async () => {
-    await stream.enableFeed(isMicEnabled, stream.isVideoEnabled);
-  }, [stream, isMicEnabled]);
+    await stream.joinRoom(userId, roomId, isMicEnabled, stream.isVideoEnabled);
+  }, [stream, userId, roomId, isMicEnabled]);
 
   // const kickUser = useCallback(async () => {
   //   await stream.kickUser(stream.roomId, stream.userId);
@@ -48,7 +43,6 @@ export function useVideoCall() {
     
     // Wrapped handlers
     handleJoinRoom,
-    handleEnableFeed,
   };
 }
 

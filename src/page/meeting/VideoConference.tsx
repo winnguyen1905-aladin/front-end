@@ -22,13 +22,12 @@ export const VideoConferencePage: React.FC = () => {
     isJoining,
     isJoined,
     isRemoteMediaReady,
-    isStreamEnabled,
-    isStreamSent,
     isMuted,
     isVideoEnabled,
     isScreenSharing,
     isNewRoom,
     consumers,
+    roomInfo,
     
     // Refs
     localVideoRef,
@@ -36,13 +35,12 @@ export const VideoConferencePage: React.FC = () => {
     
     // Actions
     handleJoinRoom,
-    handleEnableFeed,
-    sendFeed,
     muteAudio,
     toggleVideo,
     toggleScreenShare,
     hangUp,
     setIsVideoEnabled,
+    refreshVideoStreams,
   } = useVideoCall();
 
   // View: Join Room (pre-call lobby)
@@ -69,19 +67,18 @@ export const VideoConferencePage: React.FC = () => {
     <ActiveCallView
       localVideoRef={localVideoRef}
       isRemoteMediaReady={isRemoteMediaReady}
-      isStreamEnabled={isStreamEnabled}
-      isStreamSent={isStreamSent}
       isMuted={isMuted}
       isVideoEnabled={isVideoEnabled}
       isScreenSharing={isScreenSharing}
       consumers={consumers}
       isNewRoom={isNewRoom}
-      onEnableFeed={handleEnableFeed}
-      onSendFeed={sendFeed}
+      roomInfo={roomInfo}
+      currentUserId={userId}
       onMuteAudio={muteAudio}
       onVideoToggle={toggleVideo}
       onScreenShare={toggleScreenShare}
       onHangUp={hangUp}
+      onRefreshStreams={refreshVideoStreams}
     />
   );
 };

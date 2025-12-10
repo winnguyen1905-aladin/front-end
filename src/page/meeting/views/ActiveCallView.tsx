@@ -1,57 +1,62 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   TopBar,
   ControlBar,
   VideoGrid,
   LocalVideoPreview,
+  ParticipantsList,
 } from '@components/meeting';
 import type { ConsumerInfo } from '@components/meeting/panels/VideoGrid';
+import type { RoomInfo } from '@context/StreamContext';
 
 export interface ActiveCallViewProps {
   localVideoRef: React.RefObject<HTMLVideoElement>;
   isRemoteMediaReady: boolean;
-  isStreamEnabled: boolean;
-  isStreamSent: boolean;
   isMuted: boolean;
   isVideoEnabled: boolean;
   isScreenSharing: boolean;
   consumers: ConsumerInfo[];
   isNewRoom: boolean;
-  onEnableFeed: () => void;
-  onSendFeed: () => void;
+  roomInfo: RoomInfo | null;
+  currentUserId?: string;
   onMuteAudio: () => void;
   onVideoToggle: () => void;
   onScreenShare: () => void;
   onHangUp: () => void;
+  onRefreshStreams: () => void;
 }
 
 export const ActiveCallView: React.FC<ActiveCallViewProps> = ({
   localVideoRef,
   isRemoteMediaReady,
-  isStreamEnabled,
-  isStreamSent,
   isMuted,
   isVideoEnabled,
   isScreenSharing,
   consumers,
   isNewRoom,
-  onEnableFeed,
-  onSendFeed,
+  roomInfo,
+  currentUserId,
   onMuteAudio,
   onVideoToggle,
   onScreenShare,
   onHangUp,
+  onRefreshStreams,
 }) => {
   const [showControls, setShowControls] = useState(true);
   const [pinnedIndex, setPinnedIndex] = useState<number | null>(null);
+  const [showParticipants, setShowParticipants] = useState(false);
 
-  const handlePinVideo = (index: number) => {
+  const handlePinVideo = useCallback((index: number) => {
     setPinnedIndex(index);
-  };
+    // Refresh streams after layout change with small delay for DOM update
+    setTimeout(() => onRefreshStreams(), 50);
+  }, [onRefreshStreams]);
 
-  const handleUnpinVideo = () => {
+  const handleUnpinVideo = useCallback(() => {
     setPinnedIndex(null);
-  };
+    // Refresh streams after layout change with small delay for DOM update
+    setTimeout(() => onRefreshStreams(), 50);
+  }, [onRefreshStreams]);
 
   // Determine loading state: not a new room and not ready yet
   const isLoading = !isNewRoom && !isRemoteMediaReady;
@@ -63,7 +68,19 @@ export const ActiveCallView: React.FC<ActiveCallViewProps> = ({
       onMouseLeave={() => setShowControls(false)}
     >
       {/* Top Bar */}
-      <TopBar isVisible={showControls} />
+      <TopBar 
+        isVisible={showControls} 
+        roomInfo={roomInfo}
+        onShowParticipants={() => setShowParticipants(true)}
+      />
+
+      {/* Participants Panel */}
+      <ParticipantsList
+        isOpen={showParticipants}
+        onClose={() => setShowParticipants(false)}
+        roomInfo={roomInfo}
+        currentUserId={currentUserId}
+      />
 
       {/* Video Grid Container */}
       <div className="h-screen flex items-center justify-center p-4 pt-20 pb-32">
@@ -85,14 +102,9 @@ export const ActiveCallView: React.FC<ActiveCallViewProps> = ({
       {/* Control Bar */}
       <ControlBar
         isVisible={showControls}
-        isStreamEnabled={isStreamEnabled}
-        isStreamSent={isStreamSent}
-        isRemoteMediaReady={isRemoteMediaReady}
         isMuted={isMuted}
         isVideoEnabled={isVideoEnabled}
         isScreenSharing={isScreenSharing}
-        onEnableFeed={onEnableFeed}
-        onSendFeed={onSendFeed}
         onMuteAudio={onMuteAudio}
         onVideoToggle={onVideoToggle}
         onScreenShare={onScreenShare}
