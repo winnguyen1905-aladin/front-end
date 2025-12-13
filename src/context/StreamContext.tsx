@@ -634,11 +634,9 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
     let processedAudioTrack: MediaStreamTrack | null = null;
     
     try {
-      // Create audio processor with optimized config
+      // Create audio processor with clean passthrough config
       const audioProcessor = await createAudioProcessor(rawStream, {
-        comfortNoiseLevel: 0.002,    // Subtle comfort noise (-54dB)
         targetLevel: 0.35,           // Target output level
-        vadThreshold: -40,           // Voice detection threshold (dB)
       });
 
       audioProcessorRef.current = audioProcessor;

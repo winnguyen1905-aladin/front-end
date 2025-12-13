@@ -16,22 +16,16 @@ export function getOptimalAudioConstraints(): MediaTrackConstraints {
 
 export interface AudioProcessorConfig {
   assetsPath?: string;
-  // Voice smoothing
-  smoothingWindowMs?: number;        // Default: 50ms crossfade
-  comfortNoiseLevel?: number;        // 0-1, default: 0.02 (-34dB)
   // Dynamics
   targetLevel?: number;              // Target RMS level, default: 0.3
-  compressionRatio?: number;         // Default: 3
-  // VAD (Voice Activity Detection)
-  vadThreshold?: number;             // -60 to 0 dB, default: -45
-  vadHoldTimeMs?: number;            // Hold speech state, default: 300ms
+  gateThreshold?: number;            // Noise gate threshold (linear), default: 0.002
 }
 
 export interface AudioProcessor {
   getProcessedStream: () => MediaStream;
   getProcessedTrack: () => MediaStreamTrack;
-  setComfortNoise: (level: number) => void;
   setTargetLevel: (level: number) => void;
+  setGateThreshold: (threshold: number) => void;
   stop: () => void;
   isRunning: () => boolean;
   getMetrics: () => AudioMetrics;
@@ -46,43 +40,42 @@ export interface AudioMetrics {
 
 const DEFAULT_ASSETS_PATH = 'https://cdn.jsdelivr.net/npm/@shiguredo/noise-suppression@latest/dist';
 
-// AudioWorklet processor code - Fixed cold start issues
+// AudioWorklet processor code - Voice optimized with smooth gate
 const WORKLET_CODE = `
 class SmoothAudioProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     
     // ========== WARM-UP STATE ==========
-    // Critical: Prevents scratchy audio on startup
     this.isWarmedUp = false;
     this.warmupFrames = 0;
-    this.warmupTarget = 20; // ~10ms at 128 samples/frame @ 48kHz
+    this.warmupTarget = 15;
     this.fadeInProgress = 0;
-    this.fadeInDuration = 48; // ~1ms fade-in after warmup
+    this.fadeInDuration = 96;
     
-    // ========== ENVELOPE FOLLOWER ==========
+    // ========== SMOOTH NOISE GATE ==========
+    this.gateThreshold = 0.003;     // -50dB gate threshold
+    this.gateGain = 0;              // Current gate gain (0-1)
+    this.gateGainTarget = 0;
+    this.gateOpenSpeed = 0.15;      // Fast open (catches transients)
+    this.gateCloseSpeed = 0.002;    // Very slow close (smooth tail)
+    this.gateHoldCounter = 0;
+    this.gateHoldTime = 4800;       // 100ms hold after voice stops
+    
+    // ========== ENVELOPE FOLLOWER (for dynamics) ==========
     this.envelope = 0;
-    this.envelopeAttack = 0.01;    // Fast attack for transients
-    this.envelopeRelease = 0.9995; // Slow release for smoothness
-    
-    // ========== VAD (Voice Activity Detection) ==========
-    this.vadThreshold = 0.001;      // -60dB default
-    this.vadHoldTime = 14400;       // 300ms at 48kHz
-    this.vadHoldCounter = 0;
-    this.isVoiceActive = false;
-    
-    // ========== COMFORT NOISE ==========
-    this.comfortNoiseLevel = 0.0005;
-    this.noiseState = [0, 0, 0, 0, 0, 0, 0]; // Pink noise filter state
+    this.envelopeAttack = 0.02;     // Fast attack
+    this.envelopeRelease = 0.9997;  // Very slow release - KEY for smoothness
     
     // ========== ADAPTIVE GAIN ==========
     this.targetRMS = 0.3;
     this.currentGain = 1.0;
-    // Start with faster adaptation, then slow down
-    this.gainSmoothingFast = 0.99;   // For initial convergence
-    this.gainSmoothingSlow = 0.9995; // For stable operation
-    this.gainConverged = false;
-    this.gainConvergeCount = 0;
+    this.gainSmoothing = 0.9995;    // Slow gain changes
+    
+    // ========== COMPRESSION (glues words together) ==========
+    this.compThreshold = 0.4;       // Start compressing at 40%
+    this.compRatio = 3;             // 3:1 ratio
+    this.compKnee = 0.2;            // Soft knee
     
     // ========== METRICS ==========
     this.inputRMS = 0;
@@ -91,30 +84,36 @@ class SmoothAudioProcessor extends AudioWorkletProcessor {
     
     // ========== MESSAGE HANDLING ==========
     this.port.onmessage = (e) => {
-      if (e.data.type === 'setComfortNoise') {
-        this.comfortNoiseLevel = Math.max(0, Math.min(0.01, e.data.value));
-      } else if (e.data.type === 'setTargetLevel') {
+      if (e.data.type === 'setTargetLevel') {
         this.targetRMS = Math.max(0.1, Math.min(0.5, e.data.value));
-      } else if (e.data.type === 'setVadThreshold') {
-        this.vadThreshold = e.data.value;
+      } else if (e.data.type === 'setGateThreshold') {
+        this.gateThreshold = e.data.value;
       }
     };
   }
   
-  // Pink noise generator (sounds more natural than white noise)
-  generatePinkNoise() {
-    const white = Math.random() * 2 - 1;
-    this.noiseState[0] = 0.99886 * this.noiseState[0] + white * 0.0555179;
-    this.noiseState[1] = 0.99332 * this.noiseState[1] + white * 0.0750759;
-    this.noiseState[2] = 0.96900 * this.noiseState[2] + white * 0.1538520;
-    this.noiseState[3] = 0.86650 * this.noiseState[3] + white * 0.3104856;
-    this.noiseState[4] = 0.55000 * this.noiseState[4] + white * 0.5329522;
-    this.noiseState[5] = -0.7616 * this.noiseState[5] - white * 0.0168980;
-    const pink = (this.noiseState[0] + this.noiseState[1] + this.noiseState[2] + 
-                  this.noiseState[3] + this.noiseState[4] + this.noiseState[5] + 
-                  this.noiseState[6] + white * 0.5362) * 0.11;
-    this.noiseState[6] = white * 0.115926;
-    return pink;
+  // Soft-knee compression
+  compress(sample) {
+    const abs = Math.abs(sample);
+    if (abs <= this.compThreshold - this.compKnee) {
+      return sample; // Below threshold, no compression
+    }
+    
+    const sign = sample >= 0 ? 1 : -1;
+    
+    if (abs >= this.compThreshold + this.compKnee) {
+      // Above knee, full compression
+      const excess = abs - this.compThreshold;
+      const compressed = this.compThreshold + excess / this.compRatio;
+      return sign * compressed;
+    }
+    
+    // In knee region, gradual compression
+    const kneeStart = this.compThreshold - this.compKnee;
+    const kneePos = (abs - kneeStart) / (2 * this.compKnee);
+    const ratio = 1 + (this.compRatio - 1) * kneePos * kneePos;
+    const excess = abs - kneeStart;
+    return sign * (kneeStart + excess / ratio);
   }
   
   process(inputs, outputs, parameters) {
@@ -131,35 +130,6 @@ class SmoothAudioProcessor extends AudioWorkletProcessor {
     
     this.frameCount++;
     
-    // ========== WARM-UP PHASE ==========
-    // Output silence during warm-up to prevent scratchy startup
-    if (!this.isWarmedUp) {
-      this.warmupFrames++;
-      
-      // During warmup: analyze input but output silence
-      // This lets the gain/envelope stabilize
-      let sumSquares = 0;
-      for (let i = 0; i < frameLength; i++) {
-        sumSquares += inputChannel[i] * inputChannel[i];
-        outputChannel[i] = 0; // Silent output
-      }
-      this.inputRMS = Math.sqrt(sumSquares / frameLength);
-      
-      // Pre-warm the envelope and gain
-      if (this.inputRMS > 0.001) {
-        this.envelope = Math.max(this.envelope, this.inputRMS * 0.5);
-        const desiredGain = this.targetRMS / (this.inputRMS + 0.001);
-        this.currentGain = Math.max(0.5, Math.min(2.0, desiredGain));
-      }
-      
-      if (this.warmupFrames >= this.warmupTarget) {
-        this.isWarmedUp = true;
-        this.fadeInProgress = 0;
-      }
-      
-      return true;
-    }
-    
     // ========== CALCULATE INPUT RMS ==========
     let sumSquares = 0;
     for (let i = 0; i < frameLength; i++) {
@@ -167,38 +137,54 @@ class SmoothAudioProcessor extends AudioWorkletProcessor {
     }
     this.inputRMS = Math.sqrt(sumSquares / frameLength);
     
-    // ========== VAD ==========
-    this.updateVAD(this.inputRMS);
-    
-    // ========== ADAPTIVE GAIN ==========
-    if (this.inputRMS > 0.005) {
-      const desiredGain = this.targetRMS / (this.inputRMS + 0.001);
-      const clampedGain = Math.max(0.5, Math.min(2.5, desiredGain));
-      
-      // Use faster smoothing until gain converges
-      const smoothingFactor = this.gainConverged ? 
-        this.gainSmoothingSlow : this.gainSmoothingFast;
-      
-      this.currentGain = this.currentGain * smoothingFactor + 
-                         clampedGain * (1 - smoothingFactor);
-      
-      // Check if gain has converged (stable for ~50 frames)
-      if (!this.gainConverged) {
-        this.gainConvergeCount++;
-        if (this.gainConvergeCount > 50) {
-          this.gainConverged = true;
-        }
+    // ========== WARM-UP PHASE ==========
+    if (!this.isWarmedUp) {
+      this.warmupFrames++;
+      for (let i = 0; i < frameLength; i++) {
+        outputChannel[i] = 0;
       }
+      this.envelope = Math.max(this.envelope, this.inputRMS * 0.5);
+      if (this.warmupFrames >= this.warmupTarget) {
+        this.isWarmedUp = true;
+        this.fadeInProgress = 0;
+      }
+      return true;
+    }
+    
+    // ========== NOISE GATE WITH HOLD ==========
+    if (this.inputRMS > this.gateThreshold) {
+      this.gateGainTarget = 1.0;
+      this.gateHoldCounter = this.gateHoldTime;
+    } else if (this.gateHoldCounter > 0) {
+      this.gateHoldCounter -= frameLength;
+      this.gateGainTarget = 1.0; // Keep open during hold
+    } else {
+      this.gateGainTarget = 0.0;
+    }
+    
+    // Asymmetric gate smoothing (fast open, slow close)
+    if (this.gateGainTarget > this.gateGain) {
+      this.gateGain += (this.gateGainTarget - this.gateGain) * this.gateOpenSpeed;
+    } else {
+      this.gateGain += (this.gateGainTarget - this.gateGain) * this.gateCloseSpeed;
+    }
+    
+    // ========== ADAPTIVE GAIN (only when gate open) ==========
+    if (this.gateGain > 0.5 && this.inputRMS > 0.01) {
+      const desiredGain = this.targetRMS / (this.inputRMS + 0.001);
+      const clampedGain = Math.max(0.7, Math.min(2.5, desiredGain));
+      this.currentGain = this.currentGain * this.gainSmoothing + 
+                         clampedGain * (1 - this.gainSmoothing);
     }
     
     // ========== PROCESS SAMPLES ==========
     for (let i = 0; i < frameLength; i++) {
       let sample = inputChannel[i];
       
-      // Apply gain
+      // 1. Apply adaptive gain
       sample *= this.currentGain;
       
-      // Envelope follower
+      // 2. Envelope follower (per-sample for smoothness)
       const absSample = Math.abs(sample);
       if (absSample > this.envelope) {
         this.envelope += (absSample - this.envelope) * this.envelopeAttack;
@@ -206,25 +192,20 @@ class SmoothAudioProcessor extends AudioWorkletProcessor {
         this.envelope *= this.envelopeRelease;
       }
       
-      // Soft compression (gentle, avoids pumping)
-      if (this.envelope > 0.6) {
-        const excess = this.envelope - 0.6;
-        const compressionRatio = 1 / (1 + excess * 2); // Soft knee
-        sample *= compressionRatio;
+      // 3. Soft compression (glues words together)
+      sample = this.compress(sample);
+      
+      // 4. Apply smooth gate
+      sample *= this.gateGain;
+      
+      // 5. Soft limiter
+      if (Math.abs(sample) > 0.85) {
+        sample = Math.tanh(sample * 1.2) / 1.2;
       }
       
-      // Add comfort noise when silent (prevents dead air)
-      if (!this.isVoiceActive && this.comfortNoiseLevel > 0) {
-        sample += this.generatePinkNoise() * this.comfortNoiseLevel;
-      }
-      
-      // Soft limiter (transparent, prevents clipping)
-      sample = Math.tanh(sample * 0.9) / 0.9;
-      
-      // Fade-in after warmup (prevents click)
+      // 6. Fade-in after warmup
       if (this.fadeInProgress < this.fadeInDuration) {
-        const fadeGain = this.fadeInProgress / this.fadeInDuration;
-        sample *= fadeGain * fadeGain; // Quadratic fade for smoothness
+        sample *= this.fadeInProgress / this.fadeInDuration;
         this.fadeInProgress++;
       }
       
@@ -238,30 +219,19 @@ class SmoothAudioProcessor extends AudioWorkletProcessor {
     }
     this.outputRMS = Math.sqrt(sumSquares / frameLength);
     
-    // ========== SEND METRICS (throttled) ==========
-    if (this.frameCount % 10 === 0) {
+    // ========== SEND METRICS ==========
+    if (this.frameCount % 50 === 0) {
       this.port.postMessage({
         type: 'metrics',
         inputLevel: this.inputRMS,
         outputLevel: this.outputRMS,
-        isVoiceActive: this.isVoiceActive,
-        gainReduction: this.envelope > 0.6 ? (this.envelope - 0.6) / 0.4 : 0
+        isVoiceActive: this.gateGain > 0.5,
+        gainReduction: this.envelope > this.compThreshold ? 
+          (this.envelope - this.compThreshold) / this.envelope : 0
       });
     }
     
     return true;
-  }
-  
-  updateVAD(rms) {
-    if (rms > this.vadThreshold) {
-      this.isVoiceActive = true;
-      this.vadHoldCounter = this.vadHoldTime;
-    } else if (this.vadHoldCounter > 0) {
-      this.vadHoldCounter -= 128; // Decrement by frame size
-      this.isVoiceActive = this.vadHoldCounter > 0;
-    } else {
-      this.isVoiceActive = false;
-    }
   }
 }
 
@@ -285,9 +255,8 @@ export async function createAudioProcessor(
   }
 
   const assetsPath = config.assetsPath || DEFAULT_ASSETS_PATH;
-  const comfortNoiseLevel = config.comfortNoiseLevel ?? 0.02;
   const targetLevel = config.targetLevel ?? 0.3;
-  const vadThreshold = config.vadThreshold ?? -45; // dB
+  const gateThreshold = config.gateThreshold ?? 0.002;
   
   // Create AudioContext
   const audioContext = new AudioContext({ 
@@ -296,7 +265,6 @@ export async function createAudioProcessor(
   });
   
   let mlProcessedTrack: MediaStreamTrack | null = null;
-  let useMLSuppression = false;
   
   // Try to use ML noise suppression
   try {
@@ -313,7 +281,6 @@ export async function createAudioProcessor(
         mlProcessedTrack = await processor.startProcessing(trackToProcess);
         
         if (mlProcessedTrack) {
-          useMLSuppression = true;
           console.log('✅ ML Noise Suppression enabled');
         }
       }
@@ -379,16 +346,12 @@ export async function createAudioProcessor(
   
   // Set initial parameters
   workletNode.port.postMessage({ 
-    type: 'setComfortNoise', 
-    value: comfortNoiseLevel 
-  });
-  workletNode.port.postMessage({ 
     type: 'setTargetLevel', 
     value: targetLevel 
   });
   workletNode.port.postMessage({ 
-    type: 'setVadThreshold', 
-    value: Math.pow(10, vadThreshold / 20) 
+    type: 'setGateThreshold', 
+    value: gateThreshold 
   });
   
   // ==========================================
@@ -449,17 +412,17 @@ export async function createAudioProcessor(
     
     getProcessedTrack: () => destination.stream.getAudioTracks()[0],
     
-    setComfortNoise: (level: number) => {
-      workletNode.port.postMessage({ 
-        type: 'setComfortNoise', 
-        value: Math.max(0, Math.min(0.1, level))
-      });
-    },
-    
     setTargetLevel: (level: number) => {
       workletNode.port.postMessage({ 
         type: 'setTargetLevel', 
         value: Math.max(0.1, Math.min(0.8, level))
+      });
+    },
+    
+    setGateThreshold: (threshold: number) => {
+      workletNode.port.postMessage({ 
+        type: 'setGateThreshold', 
+        value: Math.max(0.0005, Math.min(0.01, threshold))
       });
     },
     
