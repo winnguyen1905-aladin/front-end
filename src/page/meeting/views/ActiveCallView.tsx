@@ -15,6 +15,7 @@ export interface ActiveCallViewProps {
   isMuted: boolean;
   isVideoEnabled: boolean;
   isScreenSharing: boolean;
+  isSegmentationEnabled?: boolean;
   consumers: ConsumerInfo[];
   isNewRoom: boolean;
   roomInfo: RoomInfo | null;
@@ -24,6 +25,7 @@ export interface ActiveCallViewProps {
   onScreenShare: () => void;
   onHangUp: () => void;
   onRefreshStreams: () => void;
+  onToggleSegmentation?: () => void;
 }
 
 export const ActiveCallView: React.FC<ActiveCallViewProps> = ({
@@ -32,6 +34,7 @@ export const ActiveCallView: React.FC<ActiveCallViewProps> = ({
   isMuted,
   isVideoEnabled,
   isScreenSharing,
+  isSegmentationEnabled = false,
   consumers,
   isNewRoom,
   roomInfo,
@@ -41,6 +44,7 @@ export const ActiveCallView: React.FC<ActiveCallViewProps> = ({
   onScreenShare,
   onHangUp,
   onRefreshStreams,
+  onToggleSegmentation,
 }) => {
   const [showControls, setShowControls] = useState(true);
   const [pinnedIndex, setPinnedIndex] = useState<number | null>(null);
@@ -105,10 +109,12 @@ export const ActiveCallView: React.FC<ActiveCallViewProps> = ({
         isMuted={isMuted}
         isVideoEnabled={isVideoEnabled}
         isScreenSharing={isScreenSharing}
+        isSegmentationEnabled={isSegmentationEnabled}
         onMuteAudio={onMuteAudio}
         onVideoToggle={onVideoToggle}
         onScreenShare={onScreenShare}
         onHangUp={onHangUp}
+        onToggleSegmentation={onToggleSegmentation}
       />
     </div>
   );

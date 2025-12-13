@@ -22,7 +22,7 @@ export const VideoPreviewPanel: React.FC<VideoPreviewPanelProps> = ({
   onVideoToggle,
 }) => {
   return (
-    <div className="relative bg-[#3c4043] rounded-3xl overflow-hidden aspect-video shadow-2xl">
+    <div className="relative bg-[#3c4043] rounded-3xl overflow-hidden h-[480px] w-full max-w-none shadow-2xl">
       {/* Video Preview or Avatar */}
       {isVideoEnabled ? (
         <video
@@ -30,7 +30,7 @@ export const VideoPreviewPanel: React.FC<VideoPreviewPanelProps> = ({
           autoPlay
           playsInline
           muted
-          className="w-full h-full object-cover"
+          className="w-full h-full object-contain bg-black"
         />
       ) : (
         <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-gray-700 to-gray-800">

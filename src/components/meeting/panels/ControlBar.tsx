@@ -7,17 +7,21 @@ import {
   VideoOffIcon,
   ScreenShareIcon,
   HangUpIcon,
+  BackgroundRemoveIcon,
 } from '../icons';
+// import { Navigate, useNavigate } from "react-router-dom";
 
 interface ControlBarProps {
   isVisible: boolean;
   isMuted: boolean;
   isVideoEnabled: boolean;
   isScreenSharing: boolean;
+  isSegmentationEnabled?: boolean;
   onMuteAudio: () => void;
   onVideoToggle: () => void;
   onScreenShare: () => void;
   onHangUp: () => void;
+  onToggleSegmentation?: () => void;
 }
 
 export const ControlBar: React.FC<ControlBarProps> = ({
@@ -25,11 +29,14 @@ export const ControlBar: React.FC<ControlBarProps> = ({
   isMuted,
   isVideoEnabled,
   isScreenSharing,
+  isSegmentationEnabled = false,
   onMuteAudio,
   onVideoToggle,
   onScreenShare,
   onHangUp,
+  onToggleSegmentation,
 }) => {
+  // const navigate = useNavigate();
   return (
     <div 
       className={`fixed bottom-0 left-0 right-0 z-40 transition-transform duration-300 ${
@@ -66,9 +73,21 @@ export const ControlBar: React.FC<ControlBarProps> = ({
               title={isScreenSharing ? 'Stop sharing' : 'Share screen'}
             />
 
+            {/* Background Removal */}
+            {onToggleSegmentation && (
+              <MediaControlButton
+                onClick={onToggleSegmentation}
+                isActive={isSegmentationEnabled}
+                activeIcon={<BackgroundRemoveIcon />}
+                inactiveIcon={<BackgroundRemoveIcon />}
+                title={isSegmentationEnabled ? 'Disable background removal' : 'Remove background'}
+              />
+            )}
+
             {/* Hang Up */}
             <MediaControlButton
-              onClick={onHangUp}
+              // onClick={onHangUp}
+              onClick={() => window.location.href = "/"}
               isActive={false}
               activeIcon={<HangUpIcon />}
               inactiveIcon={<HangUpIcon />}

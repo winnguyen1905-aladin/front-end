@@ -9,38 +9,40 @@ import React, {
 } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { Device, types } from 'mediasoup-client';
-import { Transport, Producer, Consumer } from 'mediasoup-client/types';
+import { Transport, Consumer } from 'mediasoup-client/types';
 import { playJoinSound, playLeaveSound } from '../utils/sounds';
+import {
+  createSegmentationProcessor,
+  SegmentationProcessor,
+  SegmentationMode,
+} from '../utils/selfieSegmentation';
+import {
+  getOptimalAudioConstraints,
+  createShiguredoNoiseProcessor,
+  AudioProcessor,
+  createAudioProcessor,
+} from '../utils/shiguredoNoiseProcessor';
+import {
+  UserInfo,
+  ConsumerState,
+  ConsumersMap,
+  ProducerState,
+  NewProducersData,
+  createProducerTransport,
+  consumeProducers as consumeProducersUtil,
+  closeConsumer,
+  closeProducers,
+  createEmptyProducerState,
+  clearVideoElementsForConsumer,
+  clearAllRemoteVideos,
+} from '../utils/mediasoupUtils';
+
+// Re-export types for consumers
+export type { SegmentationMode, UserInfo, ConsumerState, ConsumersMap, ProducerState, NewProducersData };
 
 // ==============================
 // Types
 // ==============================
-
-export interface UserInfo {
-  id: string;
-  displayName: string;
-}
-
-export interface ConsumerState {
-  combinedStream: MediaStream;
-  user: UserInfo;
-  consumerTransport?: Transport;
-  audioConsumer?: Consumer | null;
-  videoConsumer?: Consumer | null;
-}
-
-export interface ConsumersMap {
-  [audioPid: string]: ConsumerState;
-}
-
-export interface ProducerState {
-  audioProducer: Producer | null;
-  videoProducer: Producer | null;
-  screenAudioProducer: Producer | null;
-  screenVideoProducer: Producer | null;
-  producerTransport: Transport | null;
-  screenTransport: Transport | null;
-}
 
 export interface JoinRoomResponse {
   routerRtpCapabilities: types.RtpCapabilities;
@@ -48,18 +50,11 @@ export interface JoinRoomResponse {
   audioPidsToCreate?: string[];
   videoPidsToCreate?: (string | null)[];
   associatedUsers?: UserInfo[];
-  // Room info from server
   roomId?: string;
   ownerId?: string;
   isPasswordProtected?: boolean;
   participantCount?: number;
   error?: string;
-}
-
-export interface NewProducersData {
-  audioPidsToCreate: string[];
-  videoPidsToCreate: (string | null)[];
-  associatedUsers: UserInfo[];
 }
 
 export interface ConsumerListItem {
@@ -103,6 +98,10 @@ export interface StreamContextValue {
   consumers: ConsumerListItem[];
   roomInfo: RoomInfo | null;
   
+  // Background segmentation state
+  isSegmentationEnabled: boolean;
+  segmentationMode: SegmentationMode;
+  
   // Refs
   localVideoRef: React.RefObject<HTMLVideoElement>;
   previewVideoRef: React.RefObject<HTMLVideoElement>;
@@ -117,6 +116,13 @@ export interface StreamContextValue {
   hangUp: () => Promise<void>;
   setIsVideoEnabled: React.Dispatch<React.SetStateAction<boolean>>;
   setIsMuted: React.Dispatch<React.SetStateAction<boolean>>;
+  
+  // Background segmentation actions
+  toggleSegmentation: () => Promise<void>;
+  setSegmentationMode: (mode: SegmentationMode) => void;
+  setBlurAmount: (amount: number) => void;
+  removeBackground: () => void;
+  setBackgroundColor: (color: string) => void;
   
   // Consumer access
   getConsumers: () => ConsumersMap;
@@ -172,6 +178,11 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
   const [isNewRoom, setIsNewRoom] = useState(false);
   const [consumers, setConsumers] = useState<ConsumerListItem[]>([]);
   const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
+  
+  // Segmentation state
+  const [isSegmentationEnabled, setIsSegmentationEnabled] = useState(false);
+  const [segmentationMode, setSegmentationModeState] = useState<SegmentationMode>('blur');
+  const [blurAmountState, setBlurAmountState] = useState(10);
 
   // Refs
   const socketRef = useRef<Socket | null>(null);
@@ -194,6 +205,13 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
   const previewVideoRef = useRef<HTMLVideoElement>(null);
   const previewStreamRef = useRef<MediaStream | null>(null);
   const updateActiveSpeakersTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Segmentation refs
+  const segmentationProcessorRef = useRef<SegmentationProcessor | null>(null);
+  const rawStreamRef = useRef<MediaStream | null>(null); // Original camera stream before processing
+  
+  // Audio processing ref (Shiguredo ML-based)
+  const audioProcessorRef = useRef<AudioProcessor | null>(null);
 
   // ==============================
   // Socket Helpers
@@ -221,95 +239,11 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
   // Consumer Management
   // ==============================
 
-  const createConsumer = async (
-    transport: Transport,
-    pid: string,
-    kind: 'audio' | 'video'
-  ): Promise<Consumer | null> => {
-    const socket = getSocket();
-    const device = getDevice();
-
-    try {
-      const consumerParams = await socket.emitWithAck('consumeMedia', {
-        rtpCapabilities: device.rtpCapabilities,
-        pid,
-        kind,
-      });
-
-      if (consumerParams === 'cannotConsume' || consumerParams === 'consumeFailed') {
-        return null;
-      }
-
-      const consumer = await transport.consume(consumerParams);
-      socket.emitWithAck('unpauseConsumer', { pid, kind }).catch(console.error);
-
-      return consumer;
-    } catch (error) {
-      console.error('[StreamContext] Create consumer failed:', error);
-      return null;
-    }
-  };
-
   const consumeProducers = async (data: NewProducersData): Promise<void> => {
     const socket = getSocket();
     const device = getDevice();
-
-    const { audioPidsToCreate, videoPidsToCreate, associatedUsers } = data;
-
-    for (let i = 0; i < audioPidsToCreate.length; i++) {
-      const audioPid = audioPidsToCreate[i];
-      const videoPid = videoPidsToCreate[i];
-      const user = associatedUsers[i];
-
-      // Skip if consumer already exists
-      if (consumersRef.current[audioPid]) {
-        console.log('[StreamContext] Consumer already exists:', audioPid);
-        continue;
-      }
-
-      try {
-        const transportParams = await socket.emitWithAck('requestTransport', {
-          type: 'consumer',
-          audioPid,
-        });
-
-        const consumerTransport = device.createRecvTransport(transportParams);
-
-        consumerTransport.on('connect', async ({ dtlsParameters }, callback, errback) => {
-          try {
-            const result = await socket.emitWithAck('connectTransport', {
-              dtlsParameters,
-              type: 'consumer',
-              audioPid,
-            });
-            result === 'success' ? callback() : errback(new Error('Connect failed'));
-          } catch (err) {
-            errback(err as Error);
-          }
-        });
-
-        const audioConsumer = await createConsumer(consumerTransport, audioPid, 'audio');
-        const videoConsumer = videoPid
-          ? await createConsumer(consumerTransport, videoPid, 'video')
-          : null;
-
-        const tracks: MediaStreamTrack[] = [];
-        if (audioConsumer?.track) tracks.push(audioConsumer.track);
-        if (videoConsumer?.track) tracks.push(videoConsumer.track);
-
-        consumersRef.current[audioPid] = {
-          combinedStream: new MediaStream(tracks),
-          user,
-          consumerTransport,
-          audioConsumer,
-          videoConsumer,
-        };
-      } catch (error) {
-        console.error('[StreamContext] Failed to consume:', audioPid, error);
-      }
-    }
-
-    // Update consumers state for UI
+    
+    consumersRef.current = await consumeProducersUtil(socket, device, data, consumersRef.current);
     updateConsumersState();
   };
 
@@ -337,68 +271,8 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
   };
 
   // ==============================
-  // Producer Helpers
-  // ==============================
-
-  const createProducerTransport = async (): Promise<Transport> => {
-    const socket = getSocket();
-    const device = getDevice();
-
-    const transportParams = await socket.emitWithAck('requestTransport', { type: 'producer' });
-    const producerTransport = device.createSendTransport(transportParams);
-
-    producerTransport.on('connect', async ({ dtlsParameters }, callback, errback) => {
-      try {
-        const result = await socket.emitWithAck('connectTransport', {
-          dtlsParameters,
-          type: 'producer',
-        });
-        result === 'success' ? callback() : errback(new Error('Connect failed'));
-      } catch (err) {
-        errback(err as Error);
-      }
-    });
-
-    producerTransport.on('produce', async ({ kind, rtpParameters, appData }, callback, errback) => {
-      try {
-        const isScreen = appData?.source === 'screen';
-        const streamKind = isScreen ? (kind === 'audio' ? 'screenAudio' : 'screenVideo') : kind;
-
-        const producerId = await socket.emitWithAck('startProducing', {
-          kind: streamKind,
-          rtpParameters,
-        });
-
-        producerId === 'error'
-          ? errback(new Error('Produce failed'))
-          : callback({ id: producerId });
-      } catch (err) {
-        errback(err as Error);
-      }
-    });
-
-    return producerTransport;
-  };
-
-  // ==============================
   // Event Handlers
   // ==============================
-
-  const clearVideoElementsForConsumer = (consumerState: ConsumerState): void => {
-    try {
-      const remoteVideos = document.getElementsByClassName('remote-video') as HTMLCollectionOf<HTMLVideoElement>;
-      for (let i = 0; i < remoteVideos.length; i++) {
-        const videoEl = remoteVideos[i];
-        if (videoEl.srcObject === consumerState.combinedStream) {
-          videoEl.srcObject = null;
-          const usernameEl = document.getElementById(`username-${i}`);
-          if (usernameEl) usernameEl.innerHTML = '';
-        }
-      }
-    } catch (error) {
-      console.warn('[StreamContext] Error clearing video elements:', error);
-    }
-  };
 
   const handleProducerClosed = (data: { producerId: string }): void => {
     for (const [audioPid, state] of Object.entries(consumersRef.current)) {
@@ -451,25 +325,18 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
     console.log('[StreamContext] handleParticipantLeft:', participantId);
     let hasRemoved = false;
 
-    // Iterate through all consumers to find ones belonging to the participant
     Object.entries(consumersRef.current).forEach(([key, state]) => {
-      console.log('[StreamContext] Checking consumer:', key, 'User:', state.user);
-      // Check if user ID matches (handle potential type mismatches)
       if (state.user && String(state.user.id) === String(participantId)) {
         console.log('[StreamContext] Removing consumer for user:', participantId);
         clearVideoElementsForConsumer(state);
-        state.audioConsumer?.close();
-        state.videoConsumer?.close();
-        state.consumerTransport?.close();
+        closeConsumer(state);
         delete consumersRef.current[key];
         hasRemoved = true;
       }
     });
 
     if (hasRemoved) {
-      // Update consumers state for UI
       updateConsumersState();
-      // Play leave sound when participant leaves
       playLeaveSound();
     }
   };
@@ -645,12 +512,12 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
   // ==============================
 
   const joinRoom = async (
-    userId: string, 
+    userName: string, 
     roomId: string, 
     isMicEnabled: boolean = true, 
     isVideoEnabled: boolean = true
   ): Promise<void> => {
-    if (isJoining || isJoined || !userId.trim() || !roomId.trim()) return;
+    if (isJoining || isJoined || !userName.trim() || !roomId.trim()) return;
 
     setIsJoining(true);
     setIsRemoteMediaReady(false);
@@ -661,7 +528,7 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
 
       const socket = getSocket();
       const response: JoinRoomResponse = await socket.emitWithAck('joinRoom', {
-        userId: (Math.random() * 1000).toString(),
+        userName: userName,
         roomId,
       });
 
@@ -741,43 +608,164 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
   };
 
   const enableFeed = async (isMicEnabled: boolean, isVidEnabled: boolean): Promise<void> => {
-    console.log('[StreamContext] enableFeed called - mic:', isMicEnabled, 'video:', isVidEnabled);
-    console.log('[StreamContext] Current local stream:', !!localStreamRef.current);
+  console.log('[StreamContext] enableFeed called - mic:', isMicEnabled, 'video:', isVidEnabled);
+  console.log('[StreamContext] Current local stream:', !!localStreamRef.current);
+  
+  if (localStreamRef.current) {
+    console.log('[StreamContext] Stream already exists, returning early');
+    return;
+  }
+
+  try {
+    console.log('[StreamContext] Requesting user media...');
     
-    if (localStreamRef.current) {
-      console.log('[StreamContext] Stream already exists, returning early');
-      return;
-    }
+    // Use optimal audio constraints for WebRTC (AEC + NS + AGC)
+    const rawStream = await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: getOptimalAudioConstraints(),
+    });
+    console.log('[StreamContext] Got user media stream with optimal audio constraints');
 
+    // Store raw stream for later use
+    rawStreamRef.current = rawStream;
+
+    // ========== AUDIO PROCESSING (Shiguredo ML-based) ==========
+    console.log('[StreamContext] Applying Shiguredo ML audio processing...');
+    let processedAudioTrack: MediaStreamTrack | null = null;
+    
     try {
-      console.log('[StreamContext] Requesting user media...');
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true,
+      // Create audio processor with optimized config
+      const audioProcessor = await createAudioProcessor(rawStream, {
+        comfortNoiseLevel: 0.002,    // Subtle comfort noise (-54dB)
+        targetLevel: 0.35,           // Target output level
+        vadThreshold: -40,           // Voice detection threshold (dB)
       });
-      console.log('[StreamContext] Got user media stream');
 
-      localStreamRef.current = stream;
-
-      const videoTrack = stream.getVideoTracks()[0];
-      const audioTrack = stream.getAudioTracks()[0];
-      console.log('[StreamContext] Got tracks - video:', !!videoTrack, 'audio:', !!audioTrack);
+      audioProcessorRef.current = audioProcessor;
       
-      if (videoTrack) videoTrack.enabled = isVidEnabled;
-      if (audioTrack) audioTrack.enabled = isMicEnabled;
-
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = stream;
-        localVideoRef.current.play().catch(() => {});
+      // Wait for AudioWorklet warm-up phase to complete
+      // Warm-up: 20 frames * 128 samples / 48kHz ≈ 53ms + fade-in
+      console.log('[StreamContext] Waiting for audio processor warm-up...');
+      await new Promise(resolve => setTimeout(resolve, 150));
+      
+      processedAudioTrack = audioProcessor.getProcessedTrack();
+      
+      // Verify track is live
+      if (processedAudioTrack.readyState !== 'live') {
+        throw new Error(`Processed audio track is not live: ${processedAudioTrack.readyState}`);
       }
-
-      setIsStreamEnabled(true);
-      if (!isMicEnabled) setIsMuted(true);
-      console.log('[StreamContext] enableFeed completed');
-    } catch (err) {
-      console.error('[StreamContext] Enable feed failed:', err);
+      
+      console.log('[StreamContext] ✅ Shiguredo ML audio processing applied successfully');
+      console.log('[StreamContext] Processed audio track state:', processedAudioTrack.readyState);
+      
+      // Monitor audio levels for debugging
+      const metrics = audioProcessor.getMetrics();
+      console.log('[StreamContext] Initial audio metrics:', metrics);
+      
+    } catch (audioError) {
+      console.error('[StreamContext] ❌ Shiguredo audio processing failed, using raw audio:', audioError);
+      processedAudioTrack = rawStream.getAudioTracks()[0];
     }
-  };
+
+    // ========== VIDEO PROCESSING (Background Removal) ==========
+    console.log('[StreamContext] Applying background segmentation...');
+    let processedVideoTrack: MediaStreamTrack | null = null;
+    
+    try {
+      const processor = await createSegmentationProcessor(rawStream, {
+        mode: 'remove', // Remove background by default
+        blurAmount: 10,
+      });
+      
+      segmentationProcessorRef.current = processor;
+      await processor.start();
+      
+      const processedStream = processor.getProcessedStream();
+      
+      if (processedStream) {
+        console.log('[StreamContext] Video segmentation applied successfully');
+        processedVideoTrack = processedStream.getVideoTracks()[0];
+        isSegmentationEnabledRef.current = true;
+        setIsSegmentationEnabled(true);
+      } else {
+        console.warn('[StreamContext] Processed video not available, using raw video');
+        processedVideoTrack = rawStream.getVideoTracks()[0];
+      }
+    } catch (segError) {
+      console.error('[StreamContext] Segmentation failed, using raw video:', segError);
+      processedVideoTrack = rawStream.getVideoTracks()[0];
+    }
+
+    // ========== COMBINE PROCESSED TRACKS ==========
+    // Create final stream with processed audio + processed video
+    const tracks: MediaStreamTrack[] = [];
+    if (processedVideoTrack) tracks.push(processedVideoTrack);
+    if (processedAudioTrack) tracks.push(processedAudioTrack);
+    
+    localStreamRef.current = new MediaStream(tracks);
+    console.log('[StreamContext] Combined processed stream created');
+
+    const videoTrack = localStreamRef.current.getVideoTracks()[0];
+    const audioTrack = localStreamRef.current.getAudioTracks()[0];
+    console.log('[StreamContext] Got tracks - video:', !!videoTrack, 'audio:', !!audioTrack);
+    
+    // IMPORTANT: Enable tracks BEFORE attaching to video element
+    if (videoTrack) {
+      videoTrack.enabled = isVidEnabled;
+      console.log('[StreamContext] Video track enabled:', videoTrack.enabled);
+    }
+    if (audioTrack) {
+      audioTrack.enabled = isMicEnabled;
+      console.log('[StreamContext] Audio track enabled:', audioTrack.enabled);
+    }
+
+    // Attach to local video element
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = localStreamRef.current;
+      
+      // FIXED: Ensure video plays with proper volume
+      localVideoRef.current.muted = true; // Local preview should be muted
+      localVideoRef.current.volume = 1.0;
+      
+      try {
+        await localVideoRef.current.play();
+        console.log('[StreamContext] Local video playing');
+      } catch (playError) {
+        console.error('[StreamContext] Video play failed:', playError);
+      }
+    }
+
+    // Update state
+    setIsStreamEnabled(true);
+    if (!isMicEnabled) setIsMuted(true);
+    
+    // DEBUGGING: Log audio levels periodically
+    if (audioProcessorRef.current) {
+      const checkAudioInterval = setInterval(() => {
+        if (!audioProcessorRef.current?.isRunning()) {
+          clearInterval(checkAudioInterval);
+          return;
+        }
+        
+        const metrics = audioProcessorRef.current.getMetrics();
+        console.log('[StreamContext] Audio metrics:', {
+          input: metrics.inputLevel.toFixed(4),
+          output: metrics.outputLevel.toFixed(4),
+          voiceActive: metrics.isVoiceActive,
+        });
+      }, 2000);
+      
+      // Clear interval after 10 seconds
+      setTimeout(() => clearInterval(checkAudioInterval), 10000);
+    }
+    
+    console.log('[StreamContext] ✅ enableFeed completed successfully');
+    
+  } catch (err) {
+    console.error('[StreamContext] ❌ Enable feed failed:', err);
+    throw err; // Re-throw to handle in caller
+  }
+};
 
   const sendFeed = async (): Promise<void> => {
     // Check device and stream are ready (not isJoined state since it may not be updated yet)
@@ -788,7 +776,7 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
 
     try {
       console.log('[StreamContext] Creating producer transport...');
-      const producerTransport = await createProducerTransport();
+      const producerTransport = await createProducerTransport(getSocket(), getDevice());
 
       const videoTrack = localStreamRef.current.getVideoTracks()[0];
       const audioTrack = localStreamRef.current.getAudioTracks()[0];
@@ -907,7 +895,7 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
         screenStreamRef.current = stream;
         stream.getVideoTracks()[0].onended = () => toggleScreenShare();
 
-        const screenTransport = await createProducerTransport();
+        const screenTransport = await createProducerTransport(getSocket(), getDevice());
         const videoTrack = stream.getVideoTracks()[0];
         const audioTrack = stream.getAudioTracks()[0];
 
@@ -931,6 +919,68 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
     }
   };
 
+  // ==============================
+  // Segmentation Functions
+  // ==============================
+
+  // Use ref to track segmentation state to avoid stale closure issues
+  const isSegmentationEnabledRef = useRef(false);
+  
+  const toggleSegmentation = async (): Promise<void> => {
+    // Toggle the segmentation mode (remove vs none)
+    const currentlyEnabled = isSegmentationEnabledRef.current;
+    console.log('[StreamContext] toggleSegmentation called, currently enabled:', currentlyEnabled);
+
+    if (currentlyEnabled) {
+      // Switch to 'none' mode (show original video through same canvas)
+      console.log('[StreamContext] Switching to no background effect');
+      isSegmentationEnabledRef.current = false;
+      setIsSegmentationEnabled(false);
+      
+      if (segmentationProcessorRef.current) {
+        segmentationProcessorRef.current.setMode('none');
+      }
+    } else {
+      // Switch to 'remove' mode
+      console.log('[StreamContext] Switching to background removal');
+      isSegmentationEnabledRef.current = true;
+      setIsSegmentationEnabled(true);
+      
+      if (segmentationProcessorRef.current) {
+        segmentationProcessorRef.current.setMode('remove');
+      }
+    }
+  };
+
+  const setSegmentationMode = (mode: SegmentationMode): void => {
+    setSegmentationModeState(mode);
+    if (segmentationProcessorRef.current) {
+      segmentationProcessorRef.current.setMode(mode);
+    }
+  };
+
+  const setBlurAmount = (amount: number): void => {
+    setBlurAmountState(amount);
+    if (segmentationProcessorRef.current) {
+      segmentationProcessorRef.current.setBlurAmount(amount);
+    }
+  };
+
+  const removeBackground = (): void => {
+    // Enable segmentation if not already enabled
+    if (!isSegmentationEnabled) {
+      toggleSegmentation();
+    }
+    // Set mode to remove
+    setSegmentationMode('remove');
+  };
+
+  const setBackgroundColor = (color: string): void => {
+    if (segmentationProcessorRef.current) {
+      segmentationProcessorRef.current.setBackgroundColor(color);
+    }
+  };
+
   const hangUp = async (): Promise<void> => {
     if (updateActiveSpeakersTimeoutRef.current) {
       clearTimeout(updateActiveSpeakersTimeoutRef.current);
@@ -939,38 +989,35 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
 
     if (isScreenSharing) await toggleScreenShare();
 
-    // Close producers
-    const state = producerStateRef.current;
-    state.audioProducer?.close();
-    state.videoProducer?.close();
-    state.screenAudioProducer?.close();
-    state.screenVideoProducer?.close();
-    state.producerTransport?.close();
-    state.screenTransport?.close();
+    // Stop segmentation processor
+    if (segmentationProcessorRef.current) {
+      segmentationProcessorRef.current.stop();
+      segmentationProcessorRef.current = null;
+    }
 
-    // Close consumers
+    // Stop audio processor
+    if (audioProcessorRef.current) {
+      audioProcessorRef.current.stop();
+      audioProcessorRef.current = null;
+    }
+
+    // Close producers and consumers using utils
+    closeProducers(producerStateRef.current);
     for (const consumerState of Object.values(consumersRef.current)) {
-      consumerState.audioConsumer?.close();
-      consumerState.videoConsumer?.close();
-      consumerState.consumerTransport?.close();
+      closeConsumer(consumerState);
     }
 
     // Cleanup refs
     consumersRef.current = {};
-    producerStateRef.current = {
-      audioProducer: null,
-      videoProducer: null,
-      screenAudioProducer: null,
-      screenVideoProducer: null,
-      producerTransport: null,
-      screenTransport: null,
-    };
+    producerStateRef.current = createEmptyProducerState();
 
+    // Stop both raw and processed streams
+    rawStreamRef.current?.getTracks().forEach(t => t.stop());
+    rawStreamRef.current = null;
     localStreamRef.current?.getTracks().forEach(t => t.stop());
     localStreamRef.current = null;
 
-    const remoteEls = document.getElementsByClassName('remote-video') as HTMLCollectionOf<HTMLVideoElement>;
-    Array.from(remoteEls).forEach(el => { el.srcObject = null; });
+    clearAllRemoteVideos();
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
 
     socketRef.current?.emit('leaveRoom');
@@ -984,6 +1031,7 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
     setIsNewRoom(false);
     setConsumers([]);
     setRoomInfo(null);
+    setIsSegmentationEnabled(false);
   };
 
   // ==============================
@@ -1008,6 +1056,10 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
     consumers,
     roomInfo,
     
+    // Background segmentation state
+    isSegmentationEnabled,
+    segmentationMode,
+    
     // Refs
     localVideoRef,
     previewVideoRef,
@@ -1022,6 +1074,13 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
     hangUp,
     setIsVideoEnabled,
     setIsMuted,
+    
+    // Background segmentation actions
+    toggleSegmentation,
+    setSegmentationMode,
+    setBlurAmount,
+    removeBackground,
+    setBackgroundColor,
     
     // Consumer access
     getConsumers,

@@ -22,8 +22,8 @@
     {
       // Production mode - Serve built static files
       name: 'aladin-frontend-prod',
-      script: './node_modules/.bin/serve',
-      args: ['-s', 'dist', '-l', '3000'],
+      script: 'npm',
+      args: 'run start',
       cwd: './',
       instances: 1,
       autorestart: true,

@@ -4,10 +4,11 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --host 127.0.0.1",
     "build": "tsc && vite build",
     "build:prod": "tsc && vite build --mode production",
     "preview": "vite preview",
+    "start": "serve -s dist -l 3000 --host 127.0.0.1",
     "clean": "rimraf dist",
     "pm2:dev": "pm2 start ecosystem.config.cjs --only aladin-frontend-dev",
     "pm2:prod": "pm2 start ecosystem.config.cjs --only aladin-frontend-prod",
@@ -29,11 +30,18 @@
     "vite": "^5.4.10"
   },
   "dependencies": {
+    "@jitsi/rnnoise-wasm": "^0.2.1",
+    "@mediapipe/camera_utils": "^0.3.1675466862",
+    "@mediapipe/selfie_segmentation": "^0.1.1675465747",
+    "@shiguredo/noise-suppression": "^2025.1.0",
+    "@types/uuid": "^10.0.0",
     "mediasoup-client": "^3.7.17",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.15.0",
+    "rnnoise-wasm": "^0.0.1-security",
     "serve": "^14.2.1",
-    "socket.io-client": "^4.8.1"
+    "socket.io-client": "^4.8.1",
+    "uuid": "^13.0.0"
   }
 }

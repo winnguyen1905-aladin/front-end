@@ -29,8 +29,8 @@ export const LocalVideoPreview: React.FC<LocalVideoPreviewProps> = ({
           </div>
         )}
         
-        <div className="absolute bottom-2 left-2 right-2 bg-black/60 backdrop-blur-sm px-2 py-1 rounded text-center">
-          <span className="text-white text-xs font-medium">You</span>
+        <div className="absolute bottom-2 left-2 right-2 px-2 py-1 rounded text-center">
+          {/* <span className="text-white text-xs font-medium">You</span> */}
         </div>
       </div>
     </div>

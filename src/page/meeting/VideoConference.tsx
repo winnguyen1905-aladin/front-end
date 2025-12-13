@@ -25,6 +25,7 @@ export const VideoConferencePage: React.FC = () => {
     isMuted,
     isVideoEnabled,
     isScreenSharing,
+    isSegmentationEnabled,
     isNewRoom,
     consumers,
     roomInfo,
@@ -38,6 +39,7 @@ export const VideoConferencePage: React.FC = () => {
     muteAudio,
     toggleVideo,
     toggleScreenShare,
+    toggleSegmentation,
     hangUp,
     setIsVideoEnabled,
     refreshVideoStreams,
@@ -48,7 +50,7 @@ export const VideoConferencePage: React.FC = () => {
     return (
       <JoinRoomView
         roomId={roomId}
-        userId={userId}
+        userName={userId}
         isJoining={isJoining}
         isMicEnabled={isMicEnabled}
         isVideoEnabled={isVideoEnabled}
@@ -70,6 +72,7 @@ export const VideoConferencePage: React.FC = () => {
       isMuted={isMuted}
       isVideoEnabled={isVideoEnabled}
       isScreenSharing={isScreenSharing}
+      isSegmentationEnabled={isSegmentationEnabled}
       consumers={consumers}
       isNewRoom={isNewRoom}
       roomInfo={roomInfo}
@@ -79,6 +82,7 @@ export const VideoConferencePage: React.FC = () => {
       onScreenShare={toggleScreenShare}
       onHangUp={hangUp}
       onRefreshStreams={refreshVideoStreams}
+      onToggleSegmentation={toggleSegmentation}
     />
   );
 };
