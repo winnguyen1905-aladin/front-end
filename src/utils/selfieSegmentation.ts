@@ -46,8 +46,11 @@ export async function createSegmentationProcessor(
   const width = settings.width || 640;
   const height = settings.height || 480;
   
-  const processWidth = width;
-  const processHeight = height;
+  // OPTIMIZATION: Aggressively reduce resolution for ML processing
+  // 160x120 is the minimum viable for segmentation, but 240x180 strikes a good balance
+  // This drastically reduces CPU usage for the neural network
+  const processWidth = Math.min(width, 240); 
+  const processHeight = Math.min(height, 180);
 
   // Create video element
   const sourceVideo = document.createElement('video');
@@ -335,7 +338,8 @@ export async function createSegmentationProcessor(
   
   // Render loop
   let renderTimeoutId: number | null = null;
-  const TARGET_FPS = 30;
+  // OPTIMIZATION: Reduce render FPS to 15fps to prioritize audio
+  const TARGET_FPS = 15;
   const FRAME_INTERVAL = 1000 / TARGET_FPS;
   
   function renderFrame() {
@@ -344,41 +348,29 @@ export async function createSegmentationProcessor(
     if (currentMode === 'none' || !lastMask) {
       outputCtx.drawImage(sourceVideo, 0, 0, width, height);
     } else if (currentMode === 'remove') {
+      // OPTIMIZATION: Use canvas compositing instead of pixel iteration
       outputCtx.fillStyle = backgroundColor;
       outputCtx.fillRect(0, 0, width, height);
       
       tempCtx.clearRect(0, 0, width, height);
       tempCtx.drawImage(sourceVideo, 0, 0, width, height);
-      const videoPixels = tempCtx.getImageData(0, 0, width, height);
       
       if (faceEnhancement.enabled) {
+        const videoPixels = tempCtx.getImageData(0, 0, width, height);
         applyFaceEnhancement(videoPixels);
+        tempCtx.putImageData(videoPixels, 0, 0);
       }
       
-      tempCtx.clearRect(0, 0, width, height);
+      // Use destination-in to cut out the person using the mask
+      tempCtx.globalCompositeOperation = 'destination-in';
       tempCtx.save();
       tempCtx.scale(-1, 1);
       tempCtx.translate(-width, 0);
       tempCtx.drawImage(lastMask, 0, 0, width, height);
       tempCtx.restore();
-      const maskData = tempCtx.getImageData(0, 0, width, height);
+      tempCtx.globalCompositeOperation = 'source-over';
       
-      const outputData = tempCtx.createImageData(width, height);
-      
-      for (let i = 0; i < maskData.data.length; i += 4) {
-        const maskAlpha = maskData.data[i + 3];
-        
-        if (maskAlpha > 128) {
-          outputData.data[i] = videoPixels.data[i];
-          outputData.data[i + 1] = videoPixels.data[i + 1];
-          outputData.data[i + 2] = videoPixels.data[i + 2];
-          outputData.data[i + 3] = videoPixels.data[i + 3];
-        } else {
-          outputData.data[i + 3] = 0;
-        }
-      }
-      
-      tempCtx.putImageData(outputData, 0, 0);
+      // Draw the cut-out person onto the background
       outputCtx.drawImage(tempCanvas, 0, 0);
     } else if (currentMode === 'blur') {
       outputCtx.filter = `blur(${blurAmount}px)`;
@@ -478,11 +470,14 @@ export async function createSegmentationProcessor(
         
         outputCtx.drawImage(sourceVideo, 0, 0, width, height);
         
-        processedStream = outputCanvas.captureStream(30);
+        // Match capture stream FPS to render FPS
+        processedStream = outputCanvas.captureStream(TARGET_FPS);
         audioTracks.forEach(track => processedStream!.addTrack(track));
         
         renderFrame();
-        mlIntervalId = window.setInterval(processMLFrame, 33);
+        // OPTIMIZATION: Run ML inference at very low FPS (5fps) to save CPU
+        // This is the biggest performance gain for audio quality
+        mlIntervalId = window.setInterval(processMLFrame, 200); 
         
         await new Promise<void>((resolve) => {
           const checkFrames = () => {
