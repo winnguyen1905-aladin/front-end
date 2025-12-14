@@ -49,19 +49,12 @@ export async function createSegmentationProcessor(
   const processWidth = width;
   const processHeight = height;
 
-  // Create video element - use ONLY video tracks, completely disable audio
-  const videoOnlyStream = new MediaStream();
-  sourceStream.getVideoTracks().forEach(track => {
-    videoOnlyStream.addTrack(track.clone()); // Clone to avoid affecting original
-  });
-  
+  // Create video element
   const sourceVideo = document.createElement('video');
-  sourceVideo.srcObject = videoOnlyStream;
+  sourceVideo.srcObject = sourceStream;
   sourceVideo.autoplay = true;
   sourceVideo.playsInline = true;
   sourceVideo.muted = true;
-  sourceVideo.volume = 0;
-  (sourceVideo as any).disableRemotePlayback = true;
   sourceVideo.width = width;
   sourceVideo.height = height;
 
@@ -459,6 +452,7 @@ export async function createSegmentationProcessor(
   }
 
   let processedStream: MediaStream | null = null;
+  const audioTracks = sourceStream.getAudioTracks();
 
   const processor: SegmentationProcessor = {
     start: async () => {
@@ -485,7 +479,7 @@ export async function createSegmentationProcessor(
         outputCtx.drawImage(sourceVideo, 0, 0, width, height);
         
         processedStream = outputCanvas.captureStream(30);
-        // NOTE: Audio is handled separately by StreamContext, not added here
+        audioTracks.forEach(track => processedStream!.addTrack(track));
         
         renderFrame();
         mlIntervalId = window.setInterval(processMLFrame, 33);
@@ -521,9 +515,6 @@ export async function createSegmentationProcessor(
         lastMask.close();
         lastMask = null;
       }
-      // Cleanup cloned video tracks
-      videoOnlyStream.getTracks().forEach(track => track.stop());
-      sourceVideo.srcObject = null;
       segmentation.close();
     },
 
