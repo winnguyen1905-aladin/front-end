@@ -679,13 +679,14 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
       processedAudioTrack = rawStream.getAudioTracks()[0];
     }
 
-    // ========== VIDEO PROCESSING (Background Removal) ==========
-    console.log('[StreamContext] Applying background segmentation...');
+    // ========== VIDEO PROCESSING (Background Segmentation) ==========
+    // Initialize processor with mode 'none' - user can enable background effects manually
+    console.log('[StreamContext] Initializing segmentation processor with mode none...');
     let processedVideoTrack: MediaStreamTrack | null = null;
     
     try {
       const processor = await createSegmentationProcessor(rawStream, {
-        mode: 'remove', // Remove background by default
+        mode: 'none', // Start with no background effect
         blurAmount: 10,
       });
       
@@ -695,18 +696,20 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
       const processedStream = processor.getProcessedStream();
       
       if (processedStream) {
-        console.log('[StreamContext] Video segmentation applied successfully');
+        console.log('[StreamContext] Segmentation processor ready (mode: none)');
         processedVideoTrack = processedStream.getVideoTracks()[0];
-        isSegmentationEnabledRef.current = true;
-        setIsSegmentationEnabled(true);
       } else {
         console.warn('[StreamContext] Processed video not available, using raw video');
         processedVideoTrack = rawStream.getVideoTracks()[0];
       }
     } catch (segError) {
-      console.error('[StreamContext] Segmentation failed, using raw video:', segError);
+      console.error('[StreamContext] Segmentation init failed, using raw video:', segError);
       processedVideoTrack = rawStream.getVideoTracks()[0];
     }
+    
+    // Segmentation is disabled by default (mode: none)
+    isSegmentationEnabledRef.current = false;
+    setIsSegmentationEnabled(false);
 
     // ========== COMBINE PROCESSED TRACKS ==========
     // Create final stream with processed audio + processed video
