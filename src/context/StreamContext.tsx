@@ -22,6 +22,7 @@ import {
   createShiguredoNoiseProcessor,
   AudioProcessor,
   createAudioProcessor,
+  AudioMetrics,
 } from '../utils/shiguredoNoiseProcessor';
 import {
   UserInfo,
@@ -39,7 +40,7 @@ import {
 } from '../utils/mediasoupUtils';
 
 // Re-export types for consumers
-export type { SegmentationMode, FaceEnhancementConfig, UserInfo, ConsumerState, ConsumersMap, ProducerState, NewProducersData };
+export type { SegmentationMode, FaceEnhancementConfig, AudioMetrics, UserInfo, ConsumerState, ConsumersMap, ProducerState, NewProducersData };
 
 // ==============================
 // Types
@@ -648,9 +649,8 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
     let processedAudioTrack: MediaStreamTrack | null = null;
     
     try {
-      // Create audio processor with clean passthrough config
       const audioProcessor = await createAudioProcessor(rawStream, {
-        targetLevel: 0.35,           // Target output level
+        targetLevel: 0.3,           // Target output level
       });
 
       audioProcessorRef.current = audioProcessor;

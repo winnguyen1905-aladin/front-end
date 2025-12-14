@@ -40,48 +40,125 @@ export interface AudioMetrics {
 
 const DEFAULT_ASSETS_PATH = 'https://cdn.jsdelivr.net/npm/@shiguredo/noise-suppression@latest/dist';
 
-// AudioWorklet processor code - Clean passthrough with minimal processing
+// AudioWorklet processor code - Voice optimized with smooth gate
 const WORKLET_CODE = `
 class SmoothAudioProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
-    
+
     // ========== WARM-UP STATE ==========
     this.isWarmedUp = false;
     this.warmupFrames = 0;
-    this.warmupTarget = 15; // ~40ms at 128 samples/frame @ 48kHz
+    this.warmupTarget = 15;
     this.fadeInProgress = 0;
-    this.fadeInDuration = 96; // 2ms fade-in
+    this.fadeInDuration = 96;
     
-    // ========== SMOOTH GAIN (no abrupt changes) ==========
-    this.targetRMS = 0.3;
-    this.outputGain = 1.0;
-    this.gainSmoothing = 0.9997; // Very slow changes
-    
-    // ========== ENVELOPE FOR GATING ==========
-    this.envelope = 0;
-    this.gateThreshold = 0.002;  // -54dB noise gate
-    this.gateRelease = 0.9998;   // Very slow release to avoid pumping
-    this.gateAttack = 0.3;       // Fast attack to catch transients
-    
-    // ========== SMOOTH GATE GAIN (prevents clicks) ==========
-    this.gateGain = 0;           // Start closed
+    // ========== SMOOTH NOISE GATE V3 - SPEECH CONTINUITY ==========
+    this.gateThreshold = 0.003;     // -50dB gate threshold
+    this.gateGain = 0;              // Current gate gain (0-1)
     this.gateGainTarget = 0;
-    this.gateGainSmoothing = 0.995; // Smooth gate transitions
+    this.gateOpenSpeed = 0.08;      // Slower open (no clicks!)
+    this.gateCloseSpeed = 0.0008;   // Even slower close
+    this.gateHoldCounter = 0;
+    this.gateHoldTime = 19200;      // 400ms hold (đủ cho tiếng Việt)
+    this.minGateGain = 0;           // Minimum gain when "in speech"
     
-    // ========== METRICS ==========
-    this.inputRMS = 0;
-    this.outputRMS = 0;
-    this.frameCount = 0;
+    // ========== SPEECH STATE DETECTION ==========
+    this.inSpeechMode = false;      // Are we currently in a speech phrase?
+    this.speechStartTime = 0;       // When did speech start?
+    this.speechIdleCounter = 0;     // Frames since last strong signal
+    this.speechIdleMax = 48000;     // 1 second of silence = end speech
+    this.speechBridgeGain = 0.15;   // Keep 15% gain between words
     
-    // ========== MESSAGE HANDLING ==========
-    this.port.onmessage = (e) => {
-      if (e.data.type === 'setTargetLevel') {
-        this.targetRMS = Math.max(0.1, Math.min(0.5, e.data.value));
-      } else if (e.data.type === 'setGateThreshold') {
-        this.gateThreshold = e.data.value;
-      }
-    };
+    // ========== GATE FADE ENVELOPE (tránh bộp bộp) ==========
+    this.gateFade = 0;              // Separate fade for each gate open
+    this.gateFadeSpeed = 0.05;      // Smooth fade in/out
+    
+    // ========== RMS WINDOW (phát hiện voice tốt hơn) ==========
+    this.rmsWindow = new Array(10).fill(0);
+    this.rmsWindowIndex = 0
+    
+    // ========== LOOKAHEAD BUFFER ==========
+    this.rmsHistory = new Array(30).fill(0);  // 30 frames history
+    this.rmsHistoryIndex = 0
+    
+  //   // ========== WARM-UP STATE ==========
+  //   this.isWarmedUp = false;
+  //   this.warmupFrames = 0;
+  //   this.warmupTarget = 15;
+  //   this.fadeInProgress = 0;
+  //   this.fadeInDuration = 96;
+    
+  //   // ========== SMOOTH NOISE GATE V3 - SPEECH CONTINUITY ==========
+  //   this.gateThreshold = 0.003;     // -50dB gate threshold
+  //   this.gateGain = 0;              // Current gate gain (0-1)
+  //   this.gateGainTarget = 0;
+  //   this.gateOpenSpeed = 0.08;      // Slower open (no clicks!)
+  //   this.gateCloseSpeed = 0.0008;   // Even slower close
+  //   this.gateHoldCounter = 0;
+  //   this.gateHoldTime = 19200;      // 400ms hold (đủ cho tiếng Việt)
+  //   this.minGateGain = 0;           // Minimum gain when "in speech"
+    
+  //   // ========== ENVELOPE FOLLOWER (for dynamics) ==========
+  //   this.envelope = 0;
+  //   this.envelopeAttack = 0.02;     // Fast attack
+  //   this.envelopeRelease = 0.9997;  // Very slow release - KEY for smoothness
+    
+  //   // ========== ADAPTIVE GAIN ==========
+  //   this.targetRMS = 0.3;
+  //   this.currentGain = 1.0;
+  //   this.gainSmoothing = 0.9995;    // Slow gain changes
+    
+  //   // ========== COMPRESSION (glues words together) ==========
+  //   this.compThreshold = 0.4;       // Start compressing at 40%
+  //   this.compRatio = 3;             // 3:1 ratio
+  //   this.compKnee = 0.2;            // Soft knee
+
+  //   // ========== GATE FADE ENVELOPE (tránh bộp bộp) ==========
+  //   this.gateFade = 0;              // Separate fade for each gate open
+  //   this.gateFadeSpeed = 0.05;      // Smooth fade in/out
+    
+  //   // ========== RMS WINDOW (phát hiện voice tốt hơn) ==========
+  //   this.rmsWindow = new Array(10).fill(0);
+  //   this.rmsWindowIndex = 0
+    
+  //   // ========== METRICS ==========
+  //   this.inputRMS = 0;
+  //   this.outputRMS = 0;
+  //   this.frameCount = 0;
+    
+  //   // ========== MESSAGE HANDLING ==========
+  //   this.port.onmessage = (e) => {
+  //     if (e.data.type === 'setTargetLevel') {
+  //       this.targetRMS = Math.max(0.1, Math.min(0.5, e.data.value));
+  //     } else if (e.data.type === 'setGateThreshold') {
+  //       this.gateThreshold = e.data.value;
+  //     }
+  //   };
+  // }
+  
+  // Soft-knee compression
+  compress(sample) {
+    const abs = Math.abs(sample);
+    if (abs <= this.compThreshold - this.compKnee) {
+      return sample; // Below threshold, no compression
+    }
+    
+    const sign = sample >= 0 ? 1 : -1;
+    
+    if (abs >= this.compThreshold + this.compKnee) {
+      // Above knee, full compression
+      const excess = abs - this.compThreshold;
+      const compressed = this.compThreshold + excess / this.compRatio;
+      return sign * compressed;
+    }
+    
+    // In knee region, gradual compression
+    const kneeStart = this.compThreshold - this.compKnee;
+    const kneePos = (abs - kneeStart) / (2 * this.compKnee);
+    const ratio = 1 + (this.compRatio - 1) * kneePos * kneePos;
+    const excess = abs - kneeStart;
+    return sign * (kneeStart + excess / ratio);
   }
   
   process(inputs, outputs, parameters) {
@@ -108,73 +185,72 @@ class SmoothAudioProcessor extends AudioWorkletProcessor {
     // ========== WARM-UP PHASE ==========
     if (!this.isWarmedUp) {
       this.warmupFrames++;
-      
-      // Output silence during warmup
       for (let i = 0; i < frameLength; i++) {
         outputChannel[i] = 0;
       }
-      
-      // Pre-warm the envelope
-      this.envelope = Math.max(this.envelope, this.inputRMS);
-      
+      this.envelope = Math.max(this.envelope, this.inputRMS * 0.5);
       if (this.warmupFrames >= this.warmupTarget) {
         this.isWarmedUp = true;
         this.fadeInProgress = 0;
-        // Start with gate closed
-        this.gateGain = 0;
-        this.gateGainTarget = 0;
       }
-      
       return true;
     }
     
-    // ========== ENVELOPE FOLLOWER ==========
-    if (this.inputRMS > this.envelope) {
-      this.envelope += (this.inputRMS - this.envelope) * this.gateAttack;
+    // ========== NOISE GATE WITH HOLD ==========
+    if (this.inputRMS > this.gateThreshold) {
+      this.gateGainTarget = 1.0;
+      this.gateHoldCounter = this.gateHoldTime;
+    } else if (this.gateHoldCounter > 0) {
+      this.gateHoldCounter -= frameLength;
+      this.gateGainTarget = 1.0; // Keep open during hold
     } else {
-      this.envelope *= this.gateRelease;
+      this.gateGainTarget = 0.0;
     }
     
-    // ========== NOISE GATE (smooth transitions) ==========
-    // Determine target gate state based on envelope
-    if (this.envelope > this.gateThreshold) {
-      this.gateGainTarget = 1.0; // Open gate
-    } else if (this.envelope < this.gateThreshold * 0.5) {
-      this.gateGainTarget = 0.0; // Close gate (with hysteresis)
+    // Asymmetric gate smoothing (fast open, slow close)
+    if (this.gateGainTarget > this.gateGain) {
+      this.gateGain += (this.gateGainTarget - this.gateGain) * this.gateOpenSpeed;
+    } else {
+      this.gateGain += (this.gateGainTarget - this.gateGain) * this.gateCloseSpeed;
     }
     
-    // Smooth gate gain transition (prevents clicks)
-    this.gateGain = this.gateGain * this.gateGainSmoothing + 
-                    this.gateGainTarget * (1 - this.gateGainSmoothing);
-    
-    // ========== ADAPTIVE OUTPUT GAIN ==========
-    // Only adjust gain when there's signal (prevents pumping)
-    if (this.inputRMS > 0.01 && this.gateGain > 0.5) {
+    // ========== ADAPTIVE GAIN (only when gate open) ==========
+    if (this.gateGain > 0.5 && this.inputRMS > 0.01) {
       const desiredGain = this.targetRMS / (this.inputRMS + 0.001);
-      const clampedGain = Math.max(0.7, Math.min(2.0, desiredGain));
-      this.outputGain = this.outputGain * this.gainSmoothing + 
-                        clampedGain * (1 - this.gainSmoothing);
+      const clampedGain = Math.max(0.7, Math.min(2.5, desiredGain));
+      this.currentGain = this.currentGain * this.gainSmoothing + 
+                         clampedGain * (1 - this.gainSmoothing);
     }
     
     // ========== PROCESS SAMPLES ==========
     for (let i = 0; i < frameLength; i++) {
       let sample = inputChannel[i];
       
-      // Apply output gain
-      sample *= this.outputGain;
+      // 1. Apply adaptive gain
+      sample *= this.currentGain;
       
-      // Apply smooth gate
-      sample *= this.gateGain;
-      
-      // Soft limiter (transparent)
-      if (Math.abs(sample) > 0.9) {
-        sample = Math.tanh(sample);
+      // 2. Envelope follower (per-sample for smoothness)
+      const absSample = Math.abs(sample);
+      if (absSample > this.envelope) {
+        this.envelope += (absSample - this.envelope) * this.envelopeAttack;
+      } else {
+        this.envelope *= this.envelopeRelease;
       }
       
-      // Fade-in after warmup
+      // 3. Soft compression (glues words together)
+      sample = this.compress(sample);
+      
+      // 4. Apply smooth gate
+      sample *= this.gateGain;
+      
+      // 5. Soft limiter
+      if (Math.abs(sample) > 0.85) {
+        sample = Math.tanh(sample * 1.2) / 1.2;
+      }
+      
+      // 6. Fade-in after warmup
       if (this.fadeInProgress < this.fadeInDuration) {
-        const fadeGain = this.fadeInProgress / this.fadeInDuration;
-        sample *= fadeGain;
+        sample *= this.fadeInProgress / this.fadeInDuration;
         this.fadeInProgress++;
       }
       
@@ -188,14 +264,15 @@ class SmoothAudioProcessor extends AudioWorkletProcessor {
     }
     this.outputRMS = Math.sqrt(sumSquares / frameLength);
     
-    // ========== SEND METRICS (less frequently) ==========
+    // ========== SEND METRICS ==========
     if (this.frameCount % 50 === 0) {
       this.port.postMessage({
         type: 'metrics',
         inputLevel: this.inputRMS,
         outputLevel: this.outputRMS,
         isVoiceActive: this.gateGain > 0.5,
-        gainReduction: 1 - this.gateGain
+        gainReduction: this.envelope > this.compThreshold ? 
+          (this.envelope - this.compThreshold) / this.envelope : 0
       });
     }
     
