@@ -274,14 +274,14 @@ export async function createSegmentationProcessor(
   // ========== FIXED MediaPipe Initialization ==========
   console.log('[selfieSegmentation] Initializing MediaPipe...');
   
-  // Dynamic import to handle ES Module correctly
+  // NEW:
+  console.log('[selfieSegmentation] Initializing MediaPipe...');
+
   const { SelfieSegmentation } = await import('@mediapipe/selfie_segmentation');
-  
-  // Handle both default export and named export
   const SelfieSegmentationClass = (SelfieSegmentation as any).default || SelfieSegmentation;
-  
+
   console.log('[selfieSegmentation] SelfieSegmentation loaded:', typeof SelfieSegmentationClass);
-  
+
   const segmentation = new SelfieSegmentationClass({
     locateFile: (file: string) => 
       `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
