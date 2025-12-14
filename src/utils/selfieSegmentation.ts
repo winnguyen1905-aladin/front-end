@@ -336,42 +336,44 @@ export async function createSegmentationProcessor(
     }).catch(() => {});
   });
   
-  // Helper to create a Web Worker timer that runs in background without throttling
-  function createWorkerTimer(callback: () => void, interval: number) {
-    const blob = new Blob([`
-      let intervalId;
-      self.onmessage = (e) => {
-        if (e.data.command === 'start') {
-          if (intervalId) clearInterval(intervalId);
-          intervalId = setInterval(() => {
-            self.postMessage('tick');
-          }, e.data.interval);
-        } else if (e.data.command === 'stop') {
-          if (intervalId) clearInterval(intervalId);
-        }
-      };
-    `], { type: 'application/javascript' });
+  // OPTIMIZATION: Track visibility to pause processing when tab is hidden
+  // This prevents audio distortion caused by heavy canvas processing
+  let isPageVisible = !document.hidden;
+  
+  const handleVisibilityChange = () => {
+    isPageVisible = !document.hidden;
+    console.log('[selfieSegmentation] Page visibility changed:', isPageVisible ? 'visible' : 'hidden');
+  };
+  document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    const worker = new Worker(URL.createObjectURL(blob));
-    worker.onmessage = () => callback();
-    
-    return {
-      start: () => worker.postMessage({ command: 'start', interval }),
-      stop: () => worker.postMessage({ command: 'stop' }),
-      terminate: () => worker.terminate()
-    };
-  }
-
-  // Render loop
-  let renderWorker: ReturnType<typeof createWorkerTimer> | null = null;
+  // Render loop - use simple setTimeout since we handle visibility ourselves
+  let renderTimeoutId: number | null = null;
   let isRendering = false;
   
   // OPTIMIZATION: Reduce render FPS to 15fps to prioritize audio
   const TARGET_FPS = 15;
   const FRAME_INTERVAL = 1000 / TARGET_FPS;
   
+  function scheduleNextFrame() {
+    if (!running) return;
+    renderTimeoutId = window.setTimeout(renderFrame, FRAME_INTERVAL);
+  }
+  
   function renderFrame() {
-    if (!running || isRendering) return;
+    if (!running) return;
+    
+    // CRITICAL: When page is hidden, skip heavy processing to prevent audio distortion
+    // Just draw the raw video frame without any effects
+    if (!isPageVisible) {
+      outputCtx.drawImage(sourceVideo, 0, 0, width, height);
+      scheduleNextFrame();
+      return;
+    }
+    
+    if (isRendering) {
+      scheduleNextFrame();
+      return;
+    }
     isRendering = true;
     
     try {
@@ -451,17 +453,22 @@ export async function createSegmentationProcessor(
       }
     } finally {
       isRendering = false;
+      scheduleNextFrame();
     }
   }
 
   // ML processing loop
   let processingFrame = false;
   let framesSent = 0;
-  let mlWorker: ReturnType<typeof createWorkerTimer> | null = null;
+  let mlIntervalId: number | null = null;
+  const ML_INTERVAL = 200; // 5fps for ML - low to save CPU
   
   async function processMLFrame() {
     if (!running || processingFrame) return;
     if (sourceVideo.readyState < 2) return;
+    
+    // CRITICAL: Skip ML processing when page is hidden to prevent audio distortion
+    if (!isPageVisible) return;
     
     processingFrame = true;
     try {
@@ -505,16 +512,11 @@ export async function createSegmentationProcessor(
         processedStream = outputCanvas.captureStream(TARGET_FPS);
         audioTracks.forEach(track => processedStream!.addTrack(track));
         
-        // Initialize workers
-        if (!renderWorker) {
-          renderWorker = createWorkerTimer(renderFrame, FRAME_INTERVAL);
-        }
-        if (!mlWorker) {
-          mlWorker = createWorkerTimer(processMLFrame, 200); // 5fps for ML
-        }
+        // Start render loop with setTimeout
+        scheduleNextFrame();
         
-        renderWorker.start();
-        mlWorker.start();
+        // Start ML processing loop with setInterval
+        mlIntervalId = window.setInterval(processMLFrame, ML_INTERVAL);
         
         await new Promise<void>((resolve) => {
           const checkFrames = () => {
@@ -535,20 +537,19 @@ export async function createSegmentationProcessor(
 
     stop: () => {
       running = false;
-      if (renderWorker) {
-        renderWorker.stop();
-        renderWorker.terminate();
-        renderWorker = null;
+      if (renderTimeoutId !== null) {
+        clearTimeout(renderTimeoutId);
+        renderTimeoutId = null;
       }
-      if (mlWorker) {
-        mlWorker.stop();
-        mlWorker.terminate();
-        mlWorker = null;
+      if (mlIntervalId !== null) {
+        clearInterval(mlIntervalId);
+        mlIntervalId = null;
       }
       if (lastMask) {
         lastMask.close();
         lastMask = null;
       }
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       segmentation.close();
     },
 
