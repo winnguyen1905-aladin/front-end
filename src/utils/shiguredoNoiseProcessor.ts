@@ -44,7 +44,7 @@ export interface AudioProcessorConfig {
 
 /**
  * Audio processor interface
- */
+ */ 
 export interface AudioProcessor {
   getProcessedStream: () => MediaStream;
   getProcessedTrack: () => MediaStreamTrack;

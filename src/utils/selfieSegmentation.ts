@@ -49,9 +49,10 @@ export async function createSegmentationProcessor(
   const processWidth = width;
   const processHeight = height;
 
-  // Create video element
+  // Create video element - use ONLY video tracks to avoid audio conflicts
+  const videoOnlyStream = new MediaStream(sourceStream.getVideoTracks());
   const sourceVideo = document.createElement('video');
-  sourceVideo.srcObject = sourceStream;
+  sourceVideo.srcObject = videoOnlyStream;
   sourceVideo.autoplay = true;
   sourceVideo.playsInline = true;
   sourceVideo.muted = true;
@@ -452,7 +453,6 @@ export async function createSegmentationProcessor(
   }
 
   let processedStream: MediaStream | null = null;
-  const audioTracks = sourceStream.getAudioTracks();
 
   const processor: SegmentationProcessor = {
     start: async () => {
@@ -479,7 +479,7 @@ export async function createSegmentationProcessor(
         outputCtx.drawImage(sourceVideo, 0, 0, width, height);
         
         processedStream = outputCanvas.captureStream(30);
-        audioTracks.forEach(track => processedStream!.addTrack(track));
+        // NOTE: Audio is handled separately by StreamContext, not added here
         
         renderFrame();
         mlIntervalId = window.setInterval(processMLFrame, 33);
