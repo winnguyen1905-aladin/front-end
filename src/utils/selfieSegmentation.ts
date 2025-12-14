@@ -1,7 +1,7 @@
 // MediaPipe Selfie Segmentation utility for background blur/removal
 // Uses npm packages: @mediapipe/selfie_segmentation
 
-import { SelfieSegmentation, Results } from '@mediapipe/selfie_segmentation';
+import type { Results } from '@mediapipe/selfie_segmentation';
 
 export type SegmentationMode = 'blur' | 'remove' | 'virtual' | 'none';
 
@@ -311,8 +311,20 @@ export async function createSegmentationProcessor(
 
   // Initialize MediaPipe Selfie Segmentation
   console.log('[selfieSegmentation] Initializing MediaPipe...');
-  const segmentation = new SelfieSegmentation({
-    locateFile: (file: string) => 
+ 
+  const mpModule: any = await import('@mediapipe/selfie_segmentation');
+  const SelfieSegmentationCtor: any =
+    mpModule?.SelfieSegmentation ??
+    mpModule?.default?.SelfieSegmentation ??
+    mpModule?.default;
+ 
+  if (typeof SelfieSegmentationCtor !== 'function') {
+    console.error('[selfieSegmentation] Unexpected MediaPipe module shape:', mpModule);
+    throw new TypeError('MediaPipe SelfieSegmentation constructor not found');
+  }
+ 
+  const segmentation: any = new SelfieSegmentationCtor({
+    locateFile: (file: string) =>
       `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
   });
 
