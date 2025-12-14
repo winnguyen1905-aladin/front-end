@@ -336,97 +336,128 @@ export async function createSegmentationProcessor(
     }).catch(() => {});
   });
   
+  // Helper to create a Web Worker timer that runs in background without throttling
+  function createWorkerTimer(callback: () => void, interval: number) {
+    const blob = new Blob([`
+      let intervalId;
+      self.onmessage = (e) => {
+        if (e.data.command === 'start') {
+          if (intervalId) clearInterval(intervalId);
+          intervalId = setInterval(() => {
+            self.postMessage('tick');
+          }, e.data.interval);
+        } else if (e.data.command === 'stop') {
+          if (intervalId) clearInterval(intervalId);
+        }
+      };
+    `], { type: 'application/javascript' });
+
+    const worker = new Worker(URL.createObjectURL(blob));
+    worker.onmessage = () => callback();
+    
+    return {
+      start: () => worker.postMessage({ command: 'start', interval }),
+      stop: () => worker.postMessage({ command: 'stop' }),
+      terminate: () => worker.terminate()
+    };
+  }
+
   // Render loop
-  let renderTimeoutId: number | null = null;
+  let renderWorker: ReturnType<typeof createWorkerTimer> | null = null;
+  let isRendering = false;
+  
   // OPTIMIZATION: Reduce render FPS to 15fps to prioritize audio
   const TARGET_FPS = 15;
   const FRAME_INTERVAL = 1000 / TARGET_FPS;
   
   function renderFrame() {
-    if (!running) return;
+    if (!running || isRendering) return;
+    isRendering = true;
     
-    if (currentMode === 'none' || !lastMask) {
-      outputCtx.drawImage(sourceVideo, 0, 0, width, height);
-    } else if (currentMode === 'remove') {
-      // OPTIMIZATION: Use canvas compositing instead of pixel iteration
-      outputCtx.fillStyle = backgroundColor;
-      outputCtx.fillRect(0, 0, width, height);
-      
-      tempCtx.clearRect(0, 0, width, height);
-      tempCtx.drawImage(sourceVideo, 0, 0, width, height);
-      
-      if (faceEnhancement.enabled) {
-        const videoPixels = tempCtx.getImageData(0, 0, width, height);
-        applyFaceEnhancement(videoPixels);
-        tempCtx.putImageData(videoPixels, 0, 0);
+    try {
+      if (currentMode === 'none' || !lastMask) {
+        outputCtx.drawImage(sourceVideo, 0, 0, width, height);
+      } else if (currentMode === 'remove') {
+        // OPTIMIZATION: Use canvas compositing instead of pixel iteration
+        outputCtx.fillStyle = backgroundColor;
+        outputCtx.fillRect(0, 0, width, height);
+        
+        tempCtx.clearRect(0, 0, width, height);
+        tempCtx.drawImage(sourceVideo, 0, 0, width, height);
+        
+        if (faceEnhancement.enabled) {
+          const videoPixels = tempCtx.getImageData(0, 0, width, height);
+          applyFaceEnhancement(videoPixels);
+          tempCtx.putImageData(videoPixels, 0, 0);
+        }
+        
+        // Use destination-in to cut out the person using the mask
+        tempCtx.globalCompositeOperation = 'destination-in';
+        tempCtx.save();
+        tempCtx.scale(-1, 1);
+        tempCtx.translate(-width, 0);
+        tempCtx.drawImage(lastMask, 0, 0, width, height);
+        tempCtx.restore();
+        tempCtx.globalCompositeOperation = 'source-over';
+        
+        // Draw the cut-out person onto the background
+        outputCtx.drawImage(tempCanvas, 0, 0);
+      } else if (currentMode === 'blur') {
+        outputCtx.filter = `blur(${blurAmount}px)`;
+        outputCtx.drawImage(sourceVideo, 0, 0, width, height);
+        outputCtx.filter = 'none';
+        
+        tempCtx.clearRect(0, 0, width, height);
+        tempCtx.drawImage(sourceVideo, 0, 0, width, height);
+        
+        if (faceEnhancement.enabled) {
+          const personData = tempCtx.getImageData(0, 0, width, height);
+          applyFaceEnhancement(personData);
+          tempCtx.putImageData(personData, 0, 0);
+        }
+        
+        tempCtx.globalCompositeOperation = 'destination-in';
+        tempCtx.save();
+        tempCtx.scale(-1, 1);
+        tempCtx.translate(-width, 0);
+        tempCtx.drawImage(lastMask, 0, 0, width, height);
+        tempCtx.restore();
+        tempCtx.globalCompositeOperation = 'source-over';
+        
+        outputCtx.drawImage(tempCanvas, 0, 0);
+      } else if (currentMode === 'virtual' && virtualBackground) {
+        outputCtx.drawImage(virtualBackground, 0, 0, width, height);
+        
+        tempCtx.clearRect(0, 0, width, height);
+        tempCtx.drawImage(sourceVideo, 0, 0, width, height);
+        
+        if (faceEnhancement.enabled) {
+          const personData = tempCtx.getImageData(0, 0, width, height);
+          applyFaceEnhancement(personData);
+          tempCtx.putImageData(personData, 0, 0);
+        }
+        
+        tempCtx.globalCompositeOperation = 'destination-in';
+        tempCtx.save();
+        tempCtx.scale(-1, 1);
+        tempCtx.translate(-width, 0);
+        tempCtx.drawImage(lastMask, 0, 0, width, height);
+        tempCtx.restore();
+        tempCtx.globalCompositeOperation = 'source-over';
+        
+        outputCtx.drawImage(tempCanvas, 0, 0);
+      } else {
+        outputCtx.drawImage(sourceVideo, 0, 0, width, height);
       }
-      
-      // Use destination-in to cut out the person using the mask
-      tempCtx.globalCompositeOperation = 'destination-in';
-      tempCtx.save();
-      tempCtx.scale(-1, 1);
-      tempCtx.translate(-width, 0);
-      tempCtx.drawImage(lastMask, 0, 0, width, height);
-      tempCtx.restore();
-      tempCtx.globalCompositeOperation = 'source-over';
-      
-      // Draw the cut-out person onto the background
-      outputCtx.drawImage(tempCanvas, 0, 0);
-    } else if (currentMode === 'blur') {
-      outputCtx.filter = `blur(${blurAmount}px)`;
-      outputCtx.drawImage(sourceVideo, 0, 0, width, height);
-      outputCtx.filter = 'none';
-      
-      tempCtx.clearRect(0, 0, width, height);
-      tempCtx.drawImage(sourceVideo, 0, 0, width, height);
-      
-      if (faceEnhancement.enabled) {
-        const personData = tempCtx.getImageData(0, 0, width, height);
-        applyFaceEnhancement(personData);
-        tempCtx.putImageData(personData, 0, 0);
-      }
-      
-      tempCtx.globalCompositeOperation = 'destination-in';
-      tempCtx.save();
-      tempCtx.scale(-1, 1);
-      tempCtx.translate(-width, 0);
-      tempCtx.drawImage(lastMask, 0, 0, width, height);
-      tempCtx.restore();
-      tempCtx.globalCompositeOperation = 'source-over';
-      
-      outputCtx.drawImage(tempCanvas, 0, 0);
-    } else if (currentMode === 'virtual' && virtualBackground) {
-      outputCtx.drawImage(virtualBackground, 0, 0, width, height);
-      
-      tempCtx.clearRect(0, 0, width, height);
-      tempCtx.drawImage(sourceVideo, 0, 0, width, height);
-      
-      if (faceEnhancement.enabled) {
-        const personData = tempCtx.getImageData(0, 0, width, height);
-        applyFaceEnhancement(personData);
-        tempCtx.putImageData(personData, 0, 0);
-      }
-      
-      tempCtx.globalCompositeOperation = 'destination-in';
-      tempCtx.save();
-      tempCtx.scale(-1, 1);
-      tempCtx.translate(-width, 0);
-      tempCtx.drawImage(lastMask, 0, 0, width, height);
-      tempCtx.restore();
-      tempCtx.globalCompositeOperation = 'source-over';
-      
-      outputCtx.drawImage(tempCanvas, 0, 0);
-    } else {
-      outputCtx.drawImage(sourceVideo, 0, 0, width, height);
+    } finally {
+      isRendering = false;
     }
-    
-    renderTimeoutId = window.setTimeout(renderFrame, FRAME_INTERVAL);
   }
 
   // ML processing loop
   let processingFrame = false;
   let framesSent = 0;
-  let mlIntervalId: number | null = null;
+  let mlWorker: ReturnType<typeof createWorkerTimer> | null = null;
   
   async function processMLFrame() {
     if (!running || processingFrame) return;
@@ -474,10 +505,16 @@ export async function createSegmentationProcessor(
         processedStream = outputCanvas.captureStream(TARGET_FPS);
         audioTracks.forEach(track => processedStream!.addTrack(track));
         
-        renderFrame();
-        // OPTIMIZATION: Run ML inference at very low FPS (5fps) to save CPU
-        // This is the biggest performance gain for audio quality
-        mlIntervalId = window.setInterval(processMLFrame, 200); 
+        // Initialize workers
+        if (!renderWorker) {
+          renderWorker = createWorkerTimer(renderFrame, FRAME_INTERVAL);
+        }
+        if (!mlWorker) {
+          mlWorker = createWorkerTimer(processMLFrame, 200); // 5fps for ML
+        }
+        
+        renderWorker.start();
+        mlWorker.start();
         
         await new Promise<void>((resolve) => {
           const checkFrames = () => {
@@ -498,13 +535,15 @@ export async function createSegmentationProcessor(
 
     stop: () => {
       running = false;
-      if (renderTimeoutId !== null) {
-        clearTimeout(renderTimeoutId);
-        renderTimeoutId = null;
+      if (renderWorker) {
+        renderWorker.stop();
+        renderWorker.terminate();
+        renderWorker = null;
       }
-      if (mlIntervalId !== null) {
-        clearInterval(mlIntervalId);
-        mlIntervalId = null;
+      if (mlWorker) {
+        mlWorker.stop();
+        mlWorker.terminate();
+        mlWorker = null;
       }
       if (lastMask) {
         lastMask.close();
