@@ -14,7 +14,7 @@ import {
 } from '../icons';
 import { SegmentationMode, FaceEnhancementConfig } from '@context/StreamContext';
 
-// Default background images (using Unsplash for high-quality free images)
+// Default background images (using local anime backgrounds)
 const DEFAULT_BACKGROUNDS = [
   {
     id: 'none',
@@ -29,40 +29,76 @@ const DEFAULT_BACKGROUNDS = [
     url: 'blur',
   },
   {
-    id: 'office',
-    name: 'Modern Office',
-    thumbnail: 'https://images.unsplash.com/photo-1497366216548-37526070297c?w=160&h=120&fit=crop',
-    url: 'https://images.unsplash.com/photo-1497366216548-37526070297c?w=1920&h=1080&fit=crop',
+    id: 'anime-3',
+    name: 'Anime Scene 1',
+    thumbnail: '/anh-phong-canh-anime-3.jpg.webp',
+    url: '/anh-phong-canh-anime-3.jpg.webp',
   },
   {
-    id: 'nature',
-    name: 'Nature',
-    thumbnail: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=160&h=120&fit=crop',
-    url: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=1920&h=1080&fit=crop',
+    id: 'anime-5',
+    name: 'Anime Scene 2',
+    thumbnail: '/anh-phong-canh-anime-5.jpg.webp',
+    url: '/anh-phong-canh-anime-5.jpg.webp',
   },
   {
-    id: 'beach',
-    name: 'Beach',
-    thumbnail: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=160&h=120&fit=crop',
-    url: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1920&h=1080&fit=crop',
+    id: 'anime-11',
+    name: 'Anime Scene 3',
+    thumbnail: '/anh-phong-canh-anime-11.jpg.webp',
+    url: '/anh-phong-canh-anime-11.jpg.webp',
   },
   {
-    id: 'mountain',
-    name: 'Mountains',
-    thumbnail: 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=160&h=120&fit=crop',
-    url: 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=1920&h=1080&fit=crop',
+    id: 'anime-13',
+    name: 'Anime Scene 4',
+    thumbnail: '/anh-phong-canh-anime-13.jpg.webp',
+    url: '/anh-phong-canh-anime-13.jpg.webp',
   },
   {
-    id: 'city',
-    name: 'City Skyline',
-    thumbnail: 'https://images.unsplash.com/photo-1480714378408-67cf0d13bc1b?w=160&h=120&fit=crop',
-    url: 'https://images.unsplash.com/photo-1480714378408-67cf0d13bc1b?w=1920&h=1080&fit=crop',
+    id: 'anime-16',
+    name: 'Anime Scene 5',
+    thumbnail: '/anh-phong-canh-anime-16.jpg.webp',
+    url: '/anh-phong-canh-anime-16.jpg.webp',
   },
   {
-    id: 'library',
-    name: 'Library',
-    thumbnail: 'https://images.unsplash.com/photo-1521587760476-6c12a4b040da?w=160&h=120&fit=crop',
-    url: 'https://images.unsplash.com/photo-1521587760476-6c12a4b040da?w=1920&h=1080&fit=crop',
+    id: 'anime-17',
+    name: 'Anime Scene 6',
+    thumbnail: '/anh-phong-canh-anime-17.jpg.webp',
+    url: '/anh-phong-canh-anime-17.jpg.webp',
+  },
+  {
+    id: 'anime-18',
+    name: 'Anime Scene 7',
+    thumbnail: '/anh-phong-canh-anime-18.jpg.webp',
+    url: '/anh-phong-canh-anime-18.jpg.webp',
+  },
+  {
+    id: 'anime-20',
+    name: 'Anime Scene 8',
+    thumbnail: '/anh-phong-canh-anime-20.jpg.webp',
+    url: '/anh-phong-canh-anime-20.jpg.webp',
+  },
+  {
+    id: 'anime-23',
+    name: 'Anime Scene 9',
+    thumbnail: '/anh-phong-canh-anime-23.jpg.webp',
+    url: '/anh-phong-canh-anime-23.jpg.webp',
+  },
+  {
+    id: 'anime-24',
+    name: 'Anime Scene 10',
+    thumbnail: '/anh-phong-canh-anime-24.jpg.webp',
+    url: '/anh-phong-canh-anime-24.jpg.webp',
+  },
+  {
+    id: 'nature-1',
+    name: 'Nature 1',
+    thumbnail: '/images (1).jpg',
+    url: '/images (1).jpg',
+  },
+  {
+    id: 'nature-2',
+    name: 'Nature 2',
+    thumbnail: '/images.jpg',
+    url: '/images.jpg',
   },
 ];
 
