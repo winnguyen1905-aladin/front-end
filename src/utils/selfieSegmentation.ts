@@ -49,13 +49,19 @@ export async function createSegmentationProcessor(
   const processWidth = width;
   const processHeight = height;
 
-  // Create video element - use ONLY video tracks to avoid audio conflicts
-  const videoOnlyStream = new MediaStream(sourceStream.getVideoTracks());
+  // Create video element - use ONLY video tracks, completely disable audio
+  const videoOnlyStream = new MediaStream();
+  sourceStream.getVideoTracks().forEach(track => {
+    videoOnlyStream.addTrack(track.clone()); // Clone to avoid affecting original
+  });
+  
   const sourceVideo = document.createElement('video');
   sourceVideo.srcObject = videoOnlyStream;
   sourceVideo.autoplay = true;
   sourceVideo.playsInline = true;
   sourceVideo.muted = true;
+  sourceVideo.volume = 0;
+  (sourceVideo as any).disableRemotePlayback = true;
   sourceVideo.width = width;
   sourceVideo.height = height;
 
@@ -515,6 +521,9 @@ export async function createSegmentationProcessor(
         lastMask.close();
         lastMask = null;
       }
+      // Cleanup cloned video tracks
+      videoOnlyStream.getTracks().forEach(track => track.stop());
+      sourceVideo.srcObject = null;
       segmentation.close();
     },
 

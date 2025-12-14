@@ -26,7 +26,7 @@ export function getOptimalAudioConstraints(): MediaTrackConstraints {
   return {
     echoCancellation: true,
     noiseSuppression: false,  // Use ML instead
-    autoGainControl: false,   // Manual control
+    autoGainControl: false,   // Manual control via Shiguredo
     sampleRate: 48000,
     channelCount: 1,
   };

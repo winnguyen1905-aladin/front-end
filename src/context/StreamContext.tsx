@@ -644,48 +644,55 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
     // Store raw stream for later use
     rawStreamRef.current = rawStream;
 
-    // ========== AUDIO PROCESSING (Shiguredo ML-based) ==========
+    // ========== SEPARATE AUDIO AND VIDEO STREAMS ==========
+    // Clone tracks to create completely independent streams
+    const rawAudioTrack = rawStream.getAudioTracks()[0];
+    const rawVideoTrack = rawStream.getVideoTracks()[0];
+    
+    if (!rawAudioTrack || !rawVideoTrack) {
+      throw new Error('Missing audio or video track');
+    }
+    
+    // Create separate streams for independent processing
+    const audioOnlyStream = new MediaStream([rawAudioTrack.clone()]);
+    const videoOnlyStream = new MediaStream([rawVideoTrack.clone()]);
+    
+    console.log('[StreamContext] Separated streams - Audio:', audioOnlyStream.id, 'Video:', videoOnlyStream.id);
+
+    // ========== AUDIO PROCESSING (Shiguredo ML - Independent) ==========
     console.log('[StreamContext] Applying Shiguredo ML audio processing...');
     let processedAudioTrack: MediaStreamTrack | null = null;
     
     try {
-      const audioProcessor = await createAudioProcessor(rawStream, {
-        targetLevel: 0.3,           // Target output level
+      const audioProcessor = await createAudioProcessor(audioOnlyStream, {
+        targetLevel: 0.3,
       });
 
       audioProcessorRef.current = audioProcessor;
       
-      // Wait for AudioWorklet warm-up phase to complete
-      // Warm-up: 20 frames * 128 samples / 48kHz ≈ 53ms + fade-in
       console.log('[StreamContext] Waiting for audio processor warm-up...');
       await new Promise(resolve => setTimeout(resolve, 150));
       
       processedAudioTrack = audioProcessor.getProcessedTrack();
       
-      // Verify track is live
       if (processedAudioTrack.readyState !== 'live') {
         throw new Error(`Processed audio track is not live: ${processedAudioTrack.readyState}`);
       }
       
       console.log('[StreamContext] ✅ Shiguredo ML audio processing applied successfully');
-      console.log('[StreamContext] Processed audio track state:', processedAudioTrack.readyState);
-      
-      // Monitor audio levels for debugging
-      const metrics = audioProcessor.getMetrics();
-      console.log('[StreamContext] Initial audio metrics:', metrics);
       
     } catch (audioError) {
       console.error('[StreamContext] ❌ Shiguredo audio processing failed, using raw audio:', audioError);
-      processedAudioTrack = rawStream.getAudioTracks()[0];
+      processedAudioTrack = audioOnlyStream.getAudioTracks()[0];
     }
 
-    // ========== VIDEO PROCESSING (Background Removal) ==========
+    // ========== VIDEO PROCESSING (Background Removal - Independent) ==========
     console.log('[StreamContext] Applying background segmentation...');
     let processedVideoTrack: MediaStreamTrack | null = null;
     
     try {
-      const processor = await createSegmentationProcessor(rawStream, {
-        mode: 'remove', // Remove background by default
+      const processor = await createSegmentationProcessor(videoOnlyStream, {
+        mode: 'remove',
         blurAmount: 10,
       });
       
