@@ -2,7 +2,7 @@
   apps: [
     {
       // Development mode - Vite dev server
-      name: 'aladin-frontend-dev',
+      name: 'fe-video',
       script: 'npm',
       args: 'run dev',
       cwd: './',
@@ -21,7 +21,7 @@
     },
     {
       // Production mode - Serve built static files
-      name: 'aladin-frontend-prod',
+      name: 'fe-video-prod',
       script: 'npm',
       args: 'run start',
       cwd: './',
