@@ -26,6 +26,8 @@ export const VideoConferencePage: React.FC = () => {
     isVideoEnabled,
     isScreenSharing,
     isSegmentationEnabled,
+    segmentationMode,
+    faceEnhancement,
     isNewRoom,
     consumers,
     roomInfo,
@@ -40,6 +42,9 @@ export const VideoConferencePage: React.FC = () => {
     toggleVideo,
     toggleScreenShare,
     toggleSegmentation,
+    setVirtualBackground,
+    setSegmentationMode,
+    setFaceEnhancement,
     hangUp,
     setIsVideoEnabled,
     refreshVideoStreams,
@@ -73,6 +78,8 @@ export const VideoConferencePage: React.FC = () => {
       isVideoEnabled={isVideoEnabled}
       isScreenSharing={isScreenSharing}
       isSegmentationEnabled={isSegmentationEnabled}
+      segmentationMode={segmentationMode}
+      faceEnhancement={faceEnhancement}
       consumers={consumers}
       isNewRoom={isNewRoom}
       roomInfo={roomInfo}
@@ -83,6 +90,9 @@ export const VideoConferencePage: React.FC = () => {
       onHangUp={hangUp}
       onRefreshStreams={refreshVideoStreams}
       onToggleSegmentation={toggleSegmentation}
+      onSetVirtualBackground={setVirtualBackground}
+      onSetSegmentationMode={setSegmentationMode}
+      onSetFaceEnhancement={setFaceEnhancement}
     />
   );
 };

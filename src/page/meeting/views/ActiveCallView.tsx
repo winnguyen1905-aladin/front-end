@@ -7,7 +7,7 @@ import {
   ParticipantsList,
 } from '@components/meeting';
 import type { ConsumerInfo } from '@components/meeting/panels/VideoGrid';
-import type { RoomInfo } from '@context/StreamContext';
+import type { RoomInfo, SegmentationMode, FaceEnhancementConfig } from '@context/StreamContext';
 
 export interface ActiveCallViewProps {
   localVideoRef: React.RefObject<HTMLVideoElement>;
@@ -16,6 +16,8 @@ export interface ActiveCallViewProps {
   isVideoEnabled: boolean;
   isScreenSharing: boolean;
   isSegmentationEnabled?: boolean;
+  segmentationMode?: SegmentationMode;
+  faceEnhancement?: FaceEnhancementConfig;
   consumers: ConsumerInfo[];
   isNewRoom: boolean;
   roomInfo: RoomInfo | null;
@@ -26,6 +28,9 @@ export interface ActiveCallViewProps {
   onHangUp: () => void;
   onRefreshStreams: () => void;
   onToggleSegmentation?: () => void;
+  onSetVirtualBackground?: (bg: string | File) => Promise<void>;
+  onSetSegmentationMode?: (mode: SegmentationMode) => void;
+  onSetFaceEnhancement?: (config: Partial<FaceEnhancementConfig>) => void;
 }
 
 export const ActiveCallView: React.FC<ActiveCallViewProps> = ({
@@ -35,6 +40,8 @@ export const ActiveCallView: React.FC<ActiveCallViewProps> = ({
   isVideoEnabled,
   isScreenSharing,
   isSegmentationEnabled = false,
+  segmentationMode = 'none',
+  faceEnhancement,
   consumers,
   isNewRoom,
   roomInfo,
@@ -45,6 +52,9 @@ export const ActiveCallView: React.FC<ActiveCallViewProps> = ({
   onHangUp,
   onRefreshStreams,
   onToggleSegmentation,
+  onSetVirtualBackground,
+  onSetSegmentationMode,
+  onSetFaceEnhancement,
 }) => {
   const [showControls, setShowControls] = useState(true);
   const [pinnedIndex, setPinnedIndex] = useState<number | null>(null);
@@ -110,11 +120,16 @@ export const ActiveCallView: React.FC<ActiveCallViewProps> = ({
         isVideoEnabled={isVideoEnabled}
         isScreenSharing={isScreenSharing}
         isSegmentationEnabled={isSegmentationEnabled}
+        segmentationMode={segmentationMode}
+        faceEnhancement={faceEnhancement}
         onMuteAudio={onMuteAudio}
         onVideoToggle={onVideoToggle}
         onScreenShare={onScreenShare}
         onHangUp={onHangUp}
         onToggleSegmentation={onToggleSegmentation}
+        onSetVirtualBackground={onSetVirtualBackground}
+        onSetSegmentationMode={onSetSegmentationMode}
+        onSetFaceEnhancement={onSetFaceEnhancement}
       />
     </div>
   );

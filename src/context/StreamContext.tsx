@@ -15,6 +15,7 @@ import {
   createSegmentationProcessor,
   SegmentationProcessor,
   SegmentationMode,
+  FaceEnhancementConfig,
 } from '../utils/selfieSegmentation';
 import {
   getOptimalAudioConstraints,
@@ -38,7 +39,7 @@ import {
 } from '../utils/mediasoupUtils';
 
 // Re-export types for consumers
-export type { SegmentationMode, UserInfo, ConsumerState, ConsumersMap, ProducerState, NewProducersData };
+export type { SegmentationMode, FaceEnhancementConfig, UserInfo, ConsumerState, ConsumersMap, ProducerState, NewProducersData };
 
 // ==============================
 // Types
@@ -123,6 +124,11 @@ export interface StreamContextValue {
   setBlurAmount: (amount: number) => void;
   removeBackground: () => void;
   setBackgroundColor: (color: string) => void;
+  setVirtualBackground: (bg: string | File) => Promise<void>;
+  
+  // Face enhancement actions
+  faceEnhancement: FaceEnhancementConfig;
+  setFaceEnhancement: (config: Partial<FaceEnhancementConfig>) => void;
   
   // Consumer access
   getConsumers: () => ConsumersMap;
@@ -183,6 +189,14 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
   const [isSegmentationEnabled, setIsSegmentationEnabled] = useState(false);
   const [segmentationMode, setSegmentationModeState] = useState<SegmentationMode>('blur');
   const [blurAmountState, setBlurAmountState] = useState(10);
+  
+  // Face enhancement state
+  const [faceEnhancement, setFaceEnhancementState] = useState<FaceEnhancementConfig>({
+    enabled: true,
+    smoothing: 30,
+    whitening: 20,
+    sharpening: 25,
+  });
 
   // Refs
   const socketRef = useRef<Socket | null>(null);
@@ -979,6 +993,27 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
     }
   };
 
+  const setVirtualBackground = async (bg: string | File): Promise<void> => {
+    if (segmentationProcessorRef.current) {
+      await segmentationProcessorRef.current.setVirtualBackground(bg);
+      setSegmentationModeState('virtual');
+      if (!isSegmentationEnabled) {
+        isSegmentationEnabledRef.current = true;
+        setIsSegmentationEnabled(true);
+      }
+    }
+  };
+
+  const setFaceEnhancement = (config: Partial<FaceEnhancementConfig>): void => {
+    setFaceEnhancementState(prev => {
+      const newConfig = { ...prev, ...config };
+      if (segmentationProcessorRef.current) {
+        segmentationProcessorRef.current.setFaceEnhancement(newConfig);
+      }
+      return newConfig;
+    });
+  };
+
   const hangUp = async (): Promise<void> => {
     if (updateActiveSpeakersTimeoutRef.current) {
       clearTimeout(updateActiveSpeakersTimeoutRef.current);
@@ -1079,6 +1114,11 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
     setBlurAmount,
     removeBackground,
     setBackgroundColor,
+    setVirtualBackground,
+    
+    // Face enhancement
+    faceEnhancement,
+    setFaceEnhancement,
     
     // Consumer access
     getConsumers,

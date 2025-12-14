@@ -5,11 +5,19 @@ import { SelfieSegmentation, Results } from '@mediapipe/selfie_segmentation';
 
 export type SegmentationMode = 'blur' | 'remove' | 'virtual' | 'none';
 
+export interface FaceEnhancementConfig {
+  enabled: boolean;
+  smoothing: number;   // 0-100, skin smoothing intensity
+  whitening: number;   // 0-100, skin whitening/brightening
+  sharpening: number;  // 0-100, edge sharpening for clarity
+}
+
 export interface SegmentationConfig {
   mode: SegmentationMode;
   blurAmount?: number; // 0-40, default 10
-  virtualBackground?: string | HTMLImageElement;
+  virtualBackground?: string | HTMLImageElement | File;
   backgroundColor?: string; // For 'remove' mode, default is transparent black
+  faceEnhancement?: FaceEnhancementConfig;
 }
 
 export interface SegmentationProcessor {
@@ -18,9 +26,12 @@ export interface SegmentationProcessor {
   getProcessedStream: () => MediaStream | null;
   setMode: (mode: SegmentationMode) => void;
   setBlurAmount: (amount: number) => void;
-  setVirtualBackground: (bg: string | HTMLImageElement) => void;
+  setVirtualBackground: (bg: string | HTMLImageElement | File) => Promise<void>;
   setBackgroundColor: (color: string) => void;
   isRunning: () => boolean;
+  // Face enhancement controls
+  setFaceEnhancement: (config: Partial<FaceEnhancementConfig>) => void;
+  getFaceEnhancement: () => FaceEnhancementConfig;
 }
 
 export async function createSegmentationProcessor(
@@ -78,17 +89,224 @@ export async function createSegmentationProcessor(
   let blurAmount = config.blurAmount || 10;
   let backgroundColor = config.backgroundColor || '#ffffffff'; // Transparent black default
   let virtualBackground: HTMLImageElement | null = null;
+  
+  // Face enhancement state
+  let faceEnhancement: FaceEnhancementConfig = {
+    enabled: config.faceEnhancement?.enabled ?? true,
+    smoothing: config.faceEnhancement?.smoothing ?? 30,
+    whitening: config.faceEnhancement?.whitening ?? 20,
+    sharpening: config.faceEnhancement?.sharpening ?? 25,
+  };
+  
+  // Create enhancement canvas for face processing
+  const enhanceCanvas = document.createElement('canvas');
+  enhanceCanvas.width = width;
+  enhanceCanvas.height = height;
+  const enhanceCtx = enhanceCanvas.getContext('2d', { willReadFrequently: true })!;
   let running = false;
 
   // Load virtual background if provided
+  const loadVirtualBackground = async (bg: string | HTMLImageElement | File): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      if (bg instanceof File) {
+        // Handle File upload
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const img = new Image();
+          img.onload = () => {
+            virtualBackground = img;
+            resolve();
+          };
+          img.onerror = reject;
+          img.src = e.target?.result as string;
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(bg);
+      } else if (typeof bg === 'string') {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          virtualBackground = img;
+          resolve();
+        };
+        img.onerror = reject;
+        img.src = bg;
+      } else {
+        virtualBackground = bg;
+        resolve();
+      }
+    });
+  };
+
   if (config.virtualBackground) {
-    if (typeof config.virtualBackground === 'string') {
-      virtualBackground = new Image();
-      virtualBackground.crossOrigin = 'anonymous';
-      virtualBackground.src = config.virtualBackground;
-    } else {
-      virtualBackground = config.virtualBackground;
+    loadVirtualBackground(config.virtualBackground).catch(console.error);
+  }
+  
+  // ========== FACE ENHANCEMENT FUNCTIONS ==========
+  
+  // Apply bilateral filter approximation for skin smoothing
+  function applySkinSmoothing(imageData: ImageData, intensity: number): void {
+    if (intensity <= 0) return;
+    
+    const data = imageData.data;
+    const w = imageData.width;
+    const h = imageData.height;
+    const factor = intensity / 100;
+    const radius = Math.max(1, Math.floor(3 * factor));
+    const sigma = 20 + factor * 30; // Color similarity threshold
+    
+    // Create copy for reading
+    const copy = new Uint8ClampedArray(data);
+    
+    // Simple bilateral-like smoothing (optimized for real-time)
+    for (let y = radius; y < h - radius; y += 2) { // Skip every other row for performance
+      for (let x = radius; x < w - radius; x += 2) { // Skip every other column
+        const idx = (y * w + x) * 4;
+        
+        let rSum = 0, gSum = 0, bSum = 0, wSum = 0;
+        const r0 = copy[idx], g0 = copy[idx + 1], b0 = copy[idx + 2];
+        
+        // Check if this is likely skin (simplified detection)
+        const isSkin = r0 > 60 && g0 > 40 && b0 > 20 && 
+                       r0 > g0 && r0 > b0 && 
+                       Math.abs(r0 - g0) > 15;
+        
+        if (!isSkin) continue;
+        
+        // Sample neighbors
+        for (let dy = -radius; dy <= radius; dy++) {
+          for (let dx = -radius; dx <= radius; dx++) {
+            const nIdx = ((y + dy) * w + (x + dx)) * 4;
+            const dr = copy[nIdx] - r0;
+            const dg = copy[nIdx + 1] - g0;
+            const db = copy[nIdx + 2] - b0;
+            const colorDist = Math.sqrt(dr * dr + dg * dg + db * db);
+            
+            // Weight based on color similarity
+            const weight = Math.exp(-colorDist / sigma);
+            rSum += copy[nIdx] * weight;
+            gSum += copy[nIdx + 1] * weight;
+            bSum += copy[nIdx + 2] * weight;
+            wSum += weight;
+          }
+        }
+        
+        if (wSum > 0) {
+          // Blend smoothed with original
+          const blend = factor * 0.7;
+          data[idx] = Math.round(r0 * (1 - blend) + (rSum / wSum) * blend);
+          data[idx + 1] = Math.round(g0 * (1 - blend) + (gSum / wSum) * blend);
+          data[idx + 2] = Math.round(b0 * (1 - blend) + (bSum / wSum) * blend);
+          
+          // Apply to neighbors too (fills in skipped pixels)
+          if (x + 1 < w) {
+            data[idx + 4] = data[idx];
+            data[idx + 5] = data[idx + 1];
+            data[idx + 6] = data[idx + 2];
+          }
+          if (y + 1 < h) {
+            const nextRowIdx = ((y + 1) * w + x) * 4;
+            data[nextRowIdx] = data[idx];
+            data[nextRowIdx + 1] = data[idx + 1];
+            data[nextRowIdx + 2] = data[idx + 2];
+          }
+        }
+      }
     }
+  }
+  
+  // Apply skin whitening/brightening
+  function applySkinWhitening(imageData: ImageData, intensity: number): void {
+    if (intensity <= 0) return;
+    
+    const data = imageData.data;
+    const factor = intensity / 100;
+    const brighten = 1 + factor * 0.15; // Up to 15% brighter
+    const saturationReduce = 1 - factor * 0.1; // Slightly reduce saturation
+    
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      
+      // Detect skin tones
+      const isSkin = r > 60 && g > 40 && b > 20 && 
+                     r > g && r > b && 
+                     Math.abs(r - g) > 15 &&
+                     r - b > 15;
+      
+      if (isSkin) {
+        // Convert to HSL-ish for better control
+        const max = Math.max(r, g, b);
+        const min = Math.min(r, g, b);
+        const l = (max + min) / 2;
+        
+        // Brighten and reduce saturation for whitening effect
+        let newR = Math.min(255, r * brighten);
+        let newG = Math.min(255, g * brighten);
+        let newB = Math.min(255, b * brighten);
+        
+        // Reduce color saturation slightly (makes skin look cleaner)
+        const gray = 0.299 * newR + 0.587 * newG + 0.114 * newB;
+        newR = gray + (newR - gray) * saturationReduce;
+        newG = gray + (newG - gray) * saturationReduce;
+        newB = gray + (newB - gray) * saturationReduce;
+        
+        data[i] = Math.round(Math.min(255, newR));
+        data[i + 1] = Math.round(Math.min(255, newG));
+        data[i + 2] = Math.round(Math.min(255, newB));
+      }
+    }
+  }
+  
+  // Apply sharpening using unsharp mask
+  function applySharpening(ctx: CanvasRenderingContext2D, imageData: ImageData, intensity: number): void {
+    if (intensity <= 0) return;
+    
+    const data = imageData.data;
+    const w = imageData.width;
+    const h = imageData.height;
+    const factor = intensity / 100;
+    const amount = 0.3 + factor * 0.5; // Sharpening strength
+    
+    // Create copy for reading
+    const copy = new Uint8ClampedArray(data);
+    
+    // Simple unsharp mask (3x3 kernel)
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const idx = (y * w + x) * 4;
+        
+        for (let c = 0; c < 3; c++) {
+          // Get surrounding pixels for blur
+          const blur = (
+            copy[((y-1) * w + (x-1)) * 4 + c] +
+            copy[((y-1) * w + x) * 4 + c] * 2 +
+            copy[((y-1) * w + (x+1)) * 4 + c] +
+            copy[(y * w + (x-1)) * 4 + c] * 2 +
+            copy[idx + c] * 4 +
+            copy[(y * w + (x+1)) * 4 + c] * 2 +
+            copy[((y+1) * w + (x-1)) * 4 + c] +
+            copy[((y+1) * w + x) * 4 + c] * 2 +
+            copy[((y+1) * w + (x+1)) * 4 + c]
+          ) / 16;
+          
+          // Unsharp mask: original + (original - blur) * amount
+          const sharpened = copy[idx + c] + (copy[idx + c] - blur) * amount;
+          data[idx + c] = Math.max(0, Math.min(255, Math.round(sharpened)));
+        }
+      }
+    }
+  }
+  
+  // Apply all face enhancements to person region
+  function applyFaceEnhancement(personImageData: ImageData): ImageData {
+    if (!faceEnhancement.enabled) return personImageData;
+    
+    // Apply in order: smoothing -> whitening -> sharpening
+    applySkinSmoothing(personImageData, faceEnhancement.smoothing);
+    applySkinWhitening(personImageData, faceEnhancement.whitening);
+    applySharpening(enhanceCtx, personImageData, faceEnhancement.sharpening);
+    
+    return personImageData;
   }
 
   // Initialize MediaPipe Selfie Segmentation
@@ -147,6 +365,11 @@ export async function createSegmentationProcessor(
       tempCtx.drawImage(sourceVideo, 0, 0, width, height);
       const videoPixels = tempCtx.getImageData(0, 0, width, height);
       
+      // Apply face enhancement to person pixels
+      if (faceEnhancement.enabled) {
+        applyFaceEnhancement(videoPixels);
+      }
+      
       // Draw mask mirrored horizontally to match
       tempCtx.clearRect(0, 0, width, height);
       tempCtx.save();
@@ -166,7 +389,7 @@ export async function createSegmentationProcessor(
         const maskAlpha = maskData.data[i + 3];
         
         if (maskAlpha > 128) { // If alpha is high (person)
-          // Copy video pixel
+          // Copy video pixel (already enhanced)
           outputData.data[i] = videoPixels.data[i];     // R
           outputData.data[i + 1] = videoPixels.data[i + 1]; // G
           outputData.data[i + 2] = videoPixels.data[i + 2]; // B
@@ -187,11 +410,24 @@ export async function createSegmentationProcessor(
       outputCtx.drawImage(sourceVideo, 0, 0, width, height);
       outputCtx.filter = 'none';
       
-      // Step 2: Extract person using mask
+      // Step 2: Extract person using mask with face enhancement
       tempCtx.clearRect(0, 0, width, height);
       tempCtx.drawImage(sourceVideo, 0, 0, width, height);
+      
+      // Apply face enhancement to person region
+      if (faceEnhancement.enabled) {
+        const personData = tempCtx.getImageData(0, 0, width, height);
+        applyFaceEnhancement(personData);
+        tempCtx.putImageData(personData, 0, 0);
+      }
+      
+      // Draw mirrored mask to match video orientation
       tempCtx.globalCompositeOperation = 'destination-in';
+      tempCtx.save();
+      tempCtx.scale(-1, 1);
+      tempCtx.translate(-width, 0);
       tempCtx.drawImage(lastMask, 0, 0, width, height);
+      tempCtx.restore();
       tempCtx.globalCompositeOperation = 'source-over';
       
       // Step 3: Draw sharp person on top of blurred background
@@ -200,11 +436,24 @@ export async function createSegmentationProcessor(
       // Virtual background
       outputCtx.drawImage(virtualBackground, 0, 0, width, height);
       
-      // Extract person using mask
+      // Extract person using mask with face enhancement
       tempCtx.clearRect(0, 0, width, height);
       tempCtx.drawImage(sourceVideo, 0, 0, width, height);
+      
+      // Apply face enhancement to person region
+      if (faceEnhancement.enabled) {
+        const personData = tempCtx.getImageData(0, 0, width, height);
+        applyFaceEnhancement(personData);
+        tempCtx.putImageData(personData, 0, 0);
+      }
+      
+      // Draw mirrored mask to match video orientation
       tempCtx.globalCompositeOperation = 'destination-in';
+      tempCtx.save();
+      tempCtx.scale(-1, 1);
+      tempCtx.translate(-width, 0);
       tempCtx.drawImage(lastMask, 0, 0, width, height);
+      tempCtx.restore();
       tempCtx.globalCompositeOperation = 'source-over';
       
       // Draw person on top of virtual background
@@ -325,14 +574,11 @@ export async function createSegmentationProcessor(
       blurAmount = Math.max(0, Math.min(40, amount));
     },
 
-    setVirtualBackground: (bg: string | HTMLImageElement) => {
-      if (typeof bg === 'string') {
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        img.src = bg;
-        virtualBackground = img;
-      } else {
-        virtualBackground = bg;
+    setVirtualBackground: async (bg: string | HTMLImageElement | File): Promise<void> => {
+      await loadVirtualBackground(bg);
+      // Auto-switch to virtual mode when background is set
+      if (virtualBackground) {
+        currentMode = 'virtual';
       }
     },
 
@@ -341,6 +587,17 @@ export async function createSegmentationProcessor(
     },
 
     isRunning: () => running,
+    
+    // Face enhancement controls
+    setFaceEnhancement: (config: Partial<FaceEnhancementConfig>) => {
+      faceEnhancement = {
+        ...faceEnhancement,
+        ...config,
+      };
+      console.log('[selfieSegmentation] Face enhancement updated:', faceEnhancement);
+    },
+    
+    getFaceEnhancement: () => ({ ...faceEnhancement }),
   };
 
   return processor;
