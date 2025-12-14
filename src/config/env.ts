@@ -5,8 +5,8 @@ export const env = {
   APP_VERSION: import.meta.env.VITE_APP_VERSION || '1.0.0',
   
   // API Configuration
-  API_URL: import.meta.env.VITE_API_URL || 'http://localhost:8080',
-  SOCKET_URL: import.meta.env.VITE_SOCKET_URL || 'ws://localhost:8080',
+  API_URL: import.meta.env.VITE_API_URL,
+  SOCKET_URL: import.meta.env.VITE_SOCKET_URL ,
   
   // Feature Flags
   IS_DEBUG: import.meta.env.VITE_ENABLE_DEBUG === 'true',

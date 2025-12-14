@@ -428,7 +428,7 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
 
   useEffect(() => {
     // Connect to socket.io server with /call namespace
-    const socket = io(`http://localhost:8090`, {
+    const socket = io(`${import.meta.env.VITE_SOCKET_URL}`, {
       autoConnect: true,
       transports: ['websocket', 'polling'],
       retries: 10,
