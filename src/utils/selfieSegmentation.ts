@@ -273,18 +273,41 @@ export async function createSegmentationProcessor(
 
   // ========== FIXED MediaPipe Initialization ==========
   console.log('[selfieSegmentation] Initializing MediaPipe...');
-  
-  // NEW:
-  console.log('[selfieSegmentation] Initializing MediaPipe...');
 
-  const { SelfieSegmentation } = await import('@mediapipe/selfie_segmentation');
-  const SelfieSegmentationClass = (SelfieSegmentation as any).default || SelfieSegmentation;
+  // Load SelfieSegmentation from CDN to avoid bundler issues in production
+  const CDN_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation';
+  
+  // Check if already loaded globally
+  let SelfieSegmentationClass = (window as any).SelfieSegmentation;
+  
+  if (!SelfieSegmentationClass) {
+    // Load the script from CDN
+    await new Promise<void>((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = `${CDN_URL}/selfie_segmentation.js`;
+      script.crossOrigin = 'anonymous';
+      script.onload = () => {
+        console.log('[selfieSegmentation] CDN script loaded');
+        resolve();
+      };
+      script.onerror = (e) => {
+        console.error('[selfieSegmentation] CDN script failed to load', e);
+        reject(new Error('Failed to load MediaPipe from CDN'));
+      };
+      document.head.appendChild(script);
+    });
+    
+    SelfieSegmentationClass = (window as any).SelfieSegmentation;
+  }
 
   console.log('[selfieSegmentation] SelfieSegmentation loaded:', typeof SelfieSegmentationClass);
 
+  if (typeof SelfieSegmentationClass !== 'function') {
+    throw new Error(`[selfieSegmentation] Failed to load SelfieSegmentation class from CDN. Got: ${typeof SelfieSegmentationClass}`);
+  }
+
   const segmentation = new SelfieSegmentationClass({
-    locateFile: (file: string) => 
-      `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
+    locateFile: (file: string) => `${CDN_URL}/${file}`,
   });
 
   segmentation.setOptions({
