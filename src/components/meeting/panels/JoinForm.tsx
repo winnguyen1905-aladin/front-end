@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { StatusIndicator } from '../components';
 import { SpinnerIcon } from '../icons';
 
@@ -23,24 +23,58 @@ export const JoinForm: React.FC<JoinFormProps> = ({
   onUserNameChange,
   onJoinRoom,
 }) => {
+  // Load username from localStorage on component mount
+  useEffect(() => {
+    const savedUserName = localStorage.getItem('meetingUserName');
+    if (savedUserName && !userName) {
+      onUserNameChange(savedUserName);
+    }
+  }, []);
+
+  // Save username to localStorage when it changes
+  const handleUserNameChange = (name: string) => {
+    onUserNameChange(name);
+    if (name.trim()) {
+      localStorage.setItem('meetingUserName', name.trim());
+    }
+  };
+
   return (
     <div className="space-y-6">
-      {/* Room Name Input */}
-      <FormInput
-        label="Meeting room (You Can Change It)"
-        value={roomId}
-        onChange={onRoomNameChange}
-        disabled={isJoining}
-        placeholder="Enter room code"
-      />
+      {/* Room Name Input with Join Button */}
+      <div className="flex gap-3">
+        <input
+          type="text"
+          value={roomId}
+          onChange={(e) => onRoomNameChange(e.target.value)}
+          disabled={isJoining}
+          placeholder="Enter room code"
+          className="flex-1 px-4 py-3 bg-[#3c4043] border border-[#5f6368] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+        />
+        <button
+          onClick={onJoinRoom}
+          disabled={isJoining || !userName.trim() || !roomId.trim()}
+          className="px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-all shadow-lg hover:shadow-xl disabled:shadow-none transform hover:scale-[1.02] disabled:transform-none whitespace-nowrap"
+        >
+          {isJoining ? (
+            <span className="flex items-center justify-center gap-2">
+              <SpinnerIcon className="h-4 w-4" />
+              Joining...
+            </span>
+          ) : (
+            'Join Room'
+          )}
+        </button>
+      </div>
 
       {/* User Name Input */}
-      <FormInput
-        label="Your name"
+      <input
+        type="text"
         value={userName}
-        onChange={onUserNameChange}
+        onChange={(e) => handleUserNameChange(e.target.value)}
         disabled={isJoining}
         placeholder="Enter your name"
+        className="w-full px-4 py-3 bg-[#3c4043] border border-[#5f6368] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:opacity-50 disabled:cursor-not-allowed"
       />
 
       {/* Media Status Indicators */}
@@ -48,22 +82,6 @@ export const JoinForm: React.FC<JoinFormProps> = ({
         <StatusIndicator isActive={isVideoEnabled} label="Camera" />
         <StatusIndicator isActive={isMicEnabled} label="Microphone" />
       </div>
-
-      {/* Join Button */}
-      <button
-        onClick={onJoinRoom}
-        disabled={isJoining || !userName.trim() || !roomId.trim()}
-        className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium py-4 rounded-lg transition-all shadow-lg hover:shadow-xl disabled:shadow-none transform hover:scale-[1.02] disabled:transform-none"
-      >
-        {isJoining ? (
-          <span className="flex items-center justify-center gap-3">
-            <SpinnerIcon className="h-5 w-5" />
-            Joining...
-          </span>
-        ) : (
-          'Join now'
-        )}
-      </button>
 
       {/* Back Link */}
       <div className="text-center">
@@ -77,36 +95,5 @@ export const JoinForm: React.FC<JoinFormProps> = ({
     </div>
   );
 };
-
-// Sub-component for form inputs
-interface FormInputProps {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  disabled?: boolean;
-  placeholder?: string;
-}
-
-const FormInput: React.FC<FormInputProps> = ({
-  label,
-  value,
-  onChange,
-  disabled = false,
-  placeholder,
-}) => (
-  <div>
-    <label className="block text-sm font-medium text-gray-300 mb-2">
-      {label}
-    </label>
-    <input
-      type="text"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      disabled={disabled}
-      placeholder={placeholder}
-      className="w-full px-4 py-3 bg-[#3c4043] border border-[#5f6368] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-    />
-  </div>
-);
 
 export default JoinForm;

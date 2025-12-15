@@ -10,40 +10,24 @@ export const Home: React.FC = () => {
   useEffect(() => {
     // Check if user is already registered
     const isRegistered = UserStorage.isUserRegistered();
-    console.log('🏠 Home.tsx - Is user registered?', isRegistered);
     if (!isRegistered) {
-      console.log('🏠 Home.tsx - Showing registration modal');
       setShowModal(true);
     } else {
       const storedUsername = UserStorage.getUsername();
-      console.log('🏠 Home.tsx - User already registered:', storedUsername);
       setUsername(storedUsername);
-      // Update last online timestamp
       UserStorage.updateLastOnline();
     }
   }, []);
 
   const handleRegister = (newUsername: string) => {
-    console.log('🏠 Home.tsx - Registering new user:', newUsername);
-    
-    // Save user info to localStorage
     UserStorage.saveUserInfo({
       name: newUsername,
       lastOnline: new Date().toISOString()
     });
     
-    console.log('🏠 Home.tsx - User info saved to localStorage');
-    
     setUsername(newUsername);
     setShowModal(false);
-    
-    // Dispatch custom event to notify App.tsx about user registration
-    console.log('🏠 Home.tsx - Dispatching userInfoUpdated event');
     window.dispatchEvent(new Event('userInfoUpdated'));
-    
-    // Verify it was saved
-    const saved = UserStorage.getUserInfo();
-    console.log('🏠 Home.tsx - Verification - User info in storage:', saved);
   };
 
   return (

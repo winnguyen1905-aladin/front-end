@@ -1,15 +1,15 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { StreamProvider } from '@context/StreamContext';
-import { Home, VideoConferencePage } from '@/page';
+import { VideoConferencePage } from '@/page';
 
 export const router = createBrowserRouter([
   {
     path: '/',
-    element: <Home />,
-  },  
+    element: <Navigate to="/conference" replace />,
+  },
   {
     path: '/conference',
-    element:  <StreamProvider>
+    element: <StreamProvider>
       <VideoConferencePage />
     </StreamProvider>,
   },

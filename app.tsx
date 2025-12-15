@@ -1,11 +1,12 @@
 import React from 'react';
 import { StreamProvider } from '@context/StreamContext';
-import { VideoConferencePage } from '@/page';
+import router from '@/routes';
+import { RouterProvider } from 'react-router-dom';
 
 const App: React.FC = () => {
   return (
       <StreamProvider>
-        <VideoConferencePage />
+        <RouterProvider router={router} />
       </StreamProvider>
   );
 };
