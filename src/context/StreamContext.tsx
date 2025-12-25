@@ -96,6 +96,7 @@ export interface StreamContextValue {
   isMuted: boolean;
   isVideoEnabled: boolean;
   isScreenSharing: boolean;
+  screenShareClientId: string | null;
   isNewRoom: boolean;
   consumers: ConsumerListItem[];
   roomInfo: RoomInfo | null;
@@ -182,6 +183,9 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [screenShareClientId, setScreenShareClientId] = useState<string | null>(null);
+  const [currentUserName, setCurrentUserName] = useState<string>('');
+  const [currentRoomId, setCurrentRoomId] = useState<string>('');
   const [isNewRoom, setIsNewRoom] = useState(false);
   const [consumers, setConsumers] = useState<ConsumerListItem[]>([]);
   const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
@@ -216,6 +220,16 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
   
   const localStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
+  const screenShareSocketRef = useRef<Socket | null>(null);
+  const screenShareDeviceRef = useRef<Device | null>(null);
+  const screenShareProducerStateRef = useRef<ProducerState>({
+    audioProducer: null,
+    videoProducer: null,
+    screenAudioProducer: null,
+    screenVideoProducer: null,
+    producerTransport: null,
+    screenTransport: null,
+  });
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
   const previewStreamRef = useRef<MediaStream | null>(null);
@@ -240,6 +254,16 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
   const getDevice = (): Device => {
     if (!deviceRef.current) throw new Error('Device not initialized');
     return deviceRef.current;
+  };
+
+  const getScreenShareSocket = (): Socket => {
+    if (!screenShareSocketRef.current) throw new Error('Screen share socket not connected');
+    return screenShareSocketRef.current;
+  };
+
+  const getScreenShareDevice = (): Device => {
+    if (!screenShareDeviceRef.current) throw new Error('Screen share device not initialized');
+    return screenShareDeviceRef.current;
   };
 
   const getConsumers = useCallback((): ConsumersMap => {
@@ -564,6 +588,10 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
       setIsJoined(true);
       setIsNewRoom(response.newRoom || false);
 
+      // Store current user and room info
+      setCurrentUserName(userName);
+      setCurrentRoomId(response.roomId || roomId);
+      
       // Set room info from server response
       setRoomInfo({
         roomId: response.roomId || roomId,
@@ -619,6 +647,172 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
       console.error('[StreamContext] Join failed:', err);
     } finally {
       setIsJoining(false);
+    }
+  };
+
+  // ==============================
+  // Screen Share Virtual Client
+  // ==============================
+
+  const joinScreenShareRoom = async (
+    originalUserName: string,
+    roomId: string,
+    screenStream: MediaStream
+  ): Promise<void> => {
+    console.log('[StreamContext] Starting screen share virtual client join...');
+    
+    try {
+      // Create separate socket connection for screen share
+      const screenShareSocket = io(`${import.meta.env.VITE_SOCKET_URL}`, {
+        autoConnect: true,
+        transports: ['websocket', 'polling'],
+        retries: 10,
+        ackTimeout: 1000000,
+      });
+
+      screenShareSocketRef.current = screenShareSocket;
+
+      // Wait for connection
+      await new Promise<void>((resolve, reject) => {
+        screenShareSocket.on('connect', () => {
+          console.log('[StreamContext] Screen share client connected:', screenShareSocket.id);
+          setScreenShareClientId(screenShareSocket.id || null);
+          resolve();
+        });
+        screenShareSocket.on('connect_error', (error) => {
+          console.error('[StreamContext] Screen share client connection error:', error);
+          reject(error);
+        });
+      });
+
+      // Join room as virtual screen share client
+      const screenShareUserName = `${originalUserName} (Screen)`;
+      const response: JoinRoomResponse = await screenShareSocket.emitWithAck('joinRoom', {
+        userName: screenShareUserName,
+        roomId,
+        isScreenShareClient: true,
+      });
+
+      if (!response?.routerRtpCapabilities) {
+        throw new Error('Invalid joinRoom response for screen share client');
+      }
+
+      console.log('[StreamContext] Screen share client joined room successfully');
+
+      // Initialize device for screen share client
+      if (!screenShareDeviceRef.current) {
+        screenShareDeviceRef.current = new Device();
+      }
+
+      await screenShareDeviceRef.current.load({ 
+        routerRtpCapabilities: response.routerRtpCapabilities 
+      });
+      console.log('[StreamContext] Screen share device loaded');
+
+      // Create producer transport for screen share
+      const screenTransport = await createProducerTransport(
+        getScreenShareSocket(),
+        getScreenShareDevice()
+      );
+      console.log('[StreamContext] Screen share transport created');
+
+      // Create producers for screen video and audio
+      const videoTrack = screenStream.getVideoTracks()[0];
+      const audioTrack = screenStream.getAudioTracks()[0];
+
+      const screenVideoProducer = videoTrack
+        ? await screenTransport.produce({ 
+            track: videoTrack, 
+            appData: { source: 'screen', isScreenShare: true } 
+          })
+        : null;
+
+      const screenAudioProducer = audioTrack
+        ? await screenTransport.produce({ 
+            track: audioTrack, 
+            appData: { source: 'screen', isScreenShare: true } 
+          })
+        : null;
+
+      console.log('[StreamContext] Screen share producers created - video:', !!screenVideoProducer, 'audio:', !!screenAudioProducer);
+
+      // Store screen share producer state
+      screenShareProducerStateRef.current = {
+        audioProducer: null,
+        videoProducer: null,
+        screenAudioProducer,
+        screenVideoProducer,
+        producerTransport: null,
+        screenTransport,
+      };
+
+      // Emit screen share status
+      screenShareSocket.emit('screenShareChange', { action: 'start' });
+      console.log('[StreamContext] Screen share virtual client setup completed');
+      
+    } catch (err) {
+      console.error('[StreamContext] Screen share virtual client join failed:', err);
+      // Clean up on error
+      await leaveScreenShareRoom();
+      throw err;
+    }
+  };
+
+  const leaveScreenShareRoom = async (): Promise<void> => {
+    console.log('[StreamContext] Disconnecting screen share virtual client...');
+    
+    try {
+      const screenShareSocket = screenShareSocketRef.current;
+      const screenShareState = screenShareProducerStateRef.current;
+
+      // Close producers first
+      if (screenShareState.screenAudioProducer) {
+        console.log('[StreamContext] Closing screen share audio producer');
+        screenShareState.screenAudioProducer.close();
+        screenShareState.screenAudioProducer = null;
+      }
+
+      if (screenShareState.screenVideoProducer) {
+        console.log('[StreamContext] Closing screen share video producer');
+        screenShareState.screenVideoProducer.close();
+        screenShareState.screenVideoProducer = null;
+      }
+
+      if (screenShareState.screenTransport) {
+        console.log('[StreamContext] Closing screen share transport');
+        screenShareState.screenTransport.close();
+        screenShareState.screenTransport = null;
+      }
+
+      // Directly disconnect socket without calling leaveRoom
+      // This will automatically remove the virtual client from the room
+      if (screenShareSocket) {
+        console.log('[StreamContext] Disconnecting screen share socket directly');
+        screenShareSocket.disconnect();
+        screenShareSocketRef.current = null;
+      }
+
+      // Reset screen share device
+      if (screenShareDeviceRef.current) {
+        screenShareDeviceRef.current = null;
+      }
+
+      // Reset state
+      screenShareProducerStateRef.current = {
+        audioProducer: null,
+        videoProducer: null,
+        screenAudioProducer: null,
+        screenVideoProducer: null,
+        producerTransport: null,
+        screenTransport: null,
+      };
+      
+      setScreenShareClientId(null);
+      console.log('[StreamContext] Screen share virtual client disconnected successfully');
+      console.log('[StreamContext] Main user instance remains connected and unaffected');
+      
+    } catch (err) {
+      console.error('[StreamContext] Error disconnecting screen share virtual client:', err);
     }
   };
 
@@ -869,66 +1063,132 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
   };
 
   const toggleScreenShare = async (): Promise<void> => {
-    if (!isStreamSent) return;
+    console.log('[StreamContext] toggleScreenShare - stream sent:', isStreamSent, 'currently sharing:', isScreenSharing);
+    
+    if (!isStreamSent) {
+      console.warn('[StreamContext] Stream not sent yet, cannot toggle screen share');
+      return;
+    }
+
+    if (!currentUserName || !currentRoomId) {
+      console.error('[StreamContext] Cannot start screen share - missing user or room info');
+      return;
+    }
 
     if (isScreenSharing) {
-      // Stop screen share
-      const producerIds: string[] = [];
-      const state = producerStateRef.current;
-
-      if (state.screenAudioProducer) {
-        producerIds.push(state.screenAudioProducer.id);
-        state.screenAudioProducer.close();
-        state.screenAudioProducer = null;
-      }
-
-      if (state.screenVideoProducer) {
-        producerIds.push(state.screenVideoProducer.id);
-        state.screenVideoProducer.close();
-        state.screenVideoProducer = null;
-      }
-
-      if (state.screenTransport) {
-        state.screenTransport.close();
-        state.screenTransport = null;
-      }
-
-      if (producerIds.length > 0) {
-        socketRef.current?.emit('closeProducers', { producerIds });
-      }
-
-      screenStreamRef.current?.getTracks().forEach(t => t.stop());
-      screenStreamRef.current = null;
-      setIsScreenSharing(false);
-    } else {
+      console.log('[StreamContext] Stopping screen share virtual client');
       try {
-        const stream = await navigator.mediaDevices.getDisplayMedia({
-          video: { cursor: 'always' } as any,
-          audio: true,
+        // Leave screen share room (virtual client)
+        await leaveScreenShareRoom();
+        
+        // Stop screen stream
+        screenStreamRef.current?.getTracks().forEach(t => t.stop());
+        screenStreamRef.current = null;
+        
+        setIsScreenSharing(false);
+        console.log('[StreamContext] Screen share virtual client stopped successfully');
+      } catch (err) {
+        console.error('[StreamContext] Error stopping screen share virtual client:', err);
+        setIsScreenSharing(false);
+      }
+    } else {
+      console.log('[StreamContext] Starting screen share virtual client');
+      try {
+        // Try different configurations for maximum browser compatibility
+        let stream: MediaStream;
+        console.log('[StreamContext] Browser:', navigator.userAgent);
+        
+        try {
+          console.log('[StreamContext] Attempting optimized screen capture...');
+          // Use minimal constraints for maximum compatibility
+          stream = await navigator.mediaDevices.getDisplayMedia({
+            video: {
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+              frameRate: { ideal: 30 }
+            } as any,
+            audio: true,
+            // Request all sources to be available in picker
+            preferCurrentTab: false
+          } as any);
+          
+          console.log('[StreamContext] Successfully obtained display media with optimized config');
+        } catch (optimizedErr) {
+          console.log('[StreamContext] Optimized config failed, trying basic config...', optimizedErr);
+          
+          try {
+            // Most basic configuration - should work on all browsers
+            stream = await navigator.mediaDevices.getDisplayMedia({
+              video: true,
+              audio: true
+            });
+            console.log('[StreamContext] Successfully obtained display media with basic config');
+          } catch (basicErr) {
+            console.error('[StreamContext] All screen capture configs failed:', basicErr);
+            throw basicErr;
+          }
+        }
+
+        // Log detailed information about the captured stream
+        console.log('[StreamContext] Screen capture stream obtained:', {
+          videoTracks: stream.getVideoTracks().length,
+          audioTracks: stream.getAudioTracks().length
         });
 
+        // Log video track details for debugging
+        if (stream.getVideoTracks().length > 0) {
+          const videoTrack = stream.getVideoTracks()[0];
+          const settings = videoTrack.getSettings();
+          console.log('[StreamContext] Video track settings:', {
+            width: settings.width,
+            height: settings.height,
+            frameRate: settings.frameRate,
+            displaySurface: (settings as any).displaySurface,
+            cursor: (settings as any).cursor,
+            label: videoTrack.label
+          });
+          
+          // Check what type of surface was actually captured
+          if (settings.displaySurface) {
+            console.log('[StreamContext] Captured surface type:', settings.displaySurface);
+            if (settings.displaySurface === 'browser') {
+              console.warn('[StreamContext] ⚠️  Only browser tab was captured - desktop apps not available');
+            } else if (settings.displaySurface === 'window') {
+              console.log('[StreamContext] ✅ Application window captured successfully');
+            } else if (settings.displaySurface === 'monitor') {
+              console.log('[StreamContext] ✅ Full screen/monitor captured successfully');
+            }
+          }
+        }
+
         screenStreamRef.current = stream;
-        stream.getVideoTracks()[0].onended = () => toggleScreenShare();
+        
+        // Handle when user stops screen share from browser UI
+        stream.getVideoTracks()[0].onended = () => {
+          console.log('[StreamContext] Screen share ended by user from browser UI');
+          toggleScreenShare();
+        };
 
-        const screenTransport = await createProducerTransport(getSocket(), getDevice());
-        const videoTrack = stream.getVideoTracks()[0];
-        const audioTrack = stream.getAudioTracks()[0];
-
-        const screenVideoProducer = videoTrack
-          ? await screenTransport.produce({ track: videoTrack, appData: { source: 'screen' } })
-          : null;
-        const screenAudioProducer = audioTrack
-          ? await screenTransport.produce({ track: audioTrack, appData: { source: 'screen' } })
-          : null;
-
-        producerStateRef.current.screenVideoProducer = screenVideoProducer;
-        producerStateRef.current.screenAudioProducer = screenAudioProducer;
-        producerStateRef.current.screenTransport = screenTransport;
-
+        // Join room as virtual screen share client
+        await joinScreenShareRoom(currentUserName, currentRoomId, stream);
+        
         setIsScreenSharing(true);
+        console.log('[StreamContext] Screen share virtual client started successfully');
       } catch (err: any) {
-        if (err.name !== 'NotAllowedError') {
-          console.error('[StreamContext] Screen share failed:', err);
+        console.error('[StreamContext] Screen share virtual client failed:', err);
+        if (err.name === 'NotAllowedError') {
+          console.warn('[StreamContext] Screen share permission denied by user');
+        } else if (err.name === 'NotSupportedError') {
+          console.error('[StreamContext] Screen share not supported by browser');
+        } else if (err.name === 'AbortError') {
+          console.warn('[StreamContext] Screen share cancelled by user');
+        }
+        // Reset state on error
+        setIsScreenSharing(false);
+        // Clean up stream if created
+        if (screenStreamRef.current) {
+          screenStreamRef.current.getTracks().forEach(t => t.stop());
+          screenStreamRef.current = null;
         }
       }
     }
@@ -1067,6 +1327,8 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
     setIsNewRoom(false);
     setConsumers([]);
     setRoomInfo(null);
+    setCurrentUserName('');
+    setCurrentRoomId('');
     setIsSegmentationEnabled(false);
   };
 
@@ -1088,6 +1350,7 @@ export const StreamProvider: React.FC<StreamProviderProps> = ({
     isMuted,
     isVideoEnabled,
     isScreenSharing,
+    screenShareClientId,
     isNewRoom,
     consumers,
     roomInfo,

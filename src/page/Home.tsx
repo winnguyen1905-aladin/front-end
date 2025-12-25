@@ -10,6 +10,7 @@ export const Home: React.FC = () => {
   useEffect(() => {
     // Check if user is already registered
     const isRegistered = UserStorage.isUserRegistered();
+    
     if (!isRegistered) {
       setShowModal(true);
     } else {

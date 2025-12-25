@@ -4,6 +4,7 @@ import { AuthProvider } from './context/AuthContext';
 
 import LoginPage from './page/auth/LoginPage';
 import Home from './page/Home';
+import { TranscriptPage } from './page';
 import { UserStorage } from './utils/userStorage';
 
 interface StoredUser {
@@ -120,6 +121,12 @@ function App() {
                   </>
                 )
               } 
+            />
+            
+            {/* Transcript route - accessible to all users */}
+            <Route 
+              path="/transcript" 
+              element={<TranscriptPage />} 
             />
             
             {/* Fallback route */}
